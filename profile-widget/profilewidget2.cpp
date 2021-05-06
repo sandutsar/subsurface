@@ -2222,3 +2222,42 @@ struct dive *ProfileWidget2::mutable_dive() const
 {
 	return const_cast<dive *>(d);
 }
+
+// Draw the profile into the given rectangle. This code was reverse-engineered from qmlprofile.cpp.
+// Note: this changes the transform and therefore is not side-effect free. Don't use on a UI profile widget.
+void ProfileWidget2::draw(QPainter *painter, const QRect &pos, bool bw)
+{
+	QRect profileRect = viewport()->rect();
+
+	// now set up the transformations scale the profile and
+	// shift the painter (taking its existing transformation into account)
+	QTransform profileTransform;
+	// The size of chart with respect to the scene is fixed - by convention - to 100.0.
+	// We add 2% to the height so that the dive computer name is not cut off.
+	QSizeF sceneSize(100.0, 102.0);
+	profileTransform.scale(profileRect.width() / sceneSize.width(), profileRect.height() / sceneSize.height());
+
+	setTransform(profileTransform);
+
+	if (bw) {
+		QImage image(pos.width(), pos.height(), QImage::Format_ARGB32);
+		QPainter imgPainter(&image);
+		imgPainter.setRenderHint(QPainter::Antialiasing);
+		imgPainter.setRenderHint(QPainter::SmoothPixmapTransform);
+		render(&imgPainter, QRect(0, 0, pos.width(), pos.height()), QRect(), Qt::IgnoreAspectRatio);
+		imgPainter.end();
+
+		// convert QImage to grayscale before rendering
+		for (int i = 0; i < image.height(); i++) {
+			QRgb *pixel = reinterpret_cast<QRgb *>(image.scanLine(i));
+			QRgb *end = pixel + image.width();
+			for (; pixel != end; pixel++) {
+				int gray_val = qGray(*pixel);
+				*pixel = QColor(gray_val, gray_val, gray_val).rgb();
+			}
+		}
+		painter->drawImage(pos, image);
+	} else {
+		render(painter, pos, QRect(), Qt::IgnoreAspectRatio);
+	}
+}
