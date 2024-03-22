@@ -125,9 +125,11 @@ private:
 	void splitDive(int seconds);
 	void addSetpointChange(int seconds);
 	void removeEvent(DiveEventItem *item);
-	void hideEvents(DiveEventItem *item);
+	void hideEvent(DiveEventItem *item);
+	void hideEventType(DiveEventItem *item);
 	void editName(DiveEventItem *item);
 	void unhideEvents();
+	void unhideEventTypes();
 	void makeFirstDC();
 	void deleteCurrentDC();
 	void splitCurrentDC();
@@ -142,6 +144,9 @@ private:
 	const struct dive *d;
 	int dc;
 	bool empty; // No dive shown.
+	bool panning; // Currently panning.
+	double panningOriginalMousePosition;
+	double panningOriginalProfilePosition;
 #ifndef SUBSURFACE_MOBILE
 	DiveLineItem *mouseFollowerVertical;
 	DiveLineItem *mouseFollowerHorizontal;

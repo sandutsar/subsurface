@@ -7,8 +7,8 @@
 #include "desktop-widgets/mainwindow.h"
 #include "commands/command.h"
 #include "core/device.h"
-#include "core/divesite.h"
-#include "core/trip.h"
+#include "core/divelist.h" // For IMPORT_MERGE_ALL_TRIPS
+#include "core/divelog.h"
 #include "core/errorhelper.h"
 #include "core/file.h"
 #include "desktop-widgets/mapwidget.h"
@@ -107,12 +107,17 @@ void WebServices::updateProgress(qint64 current, qint64 total)
 
 void WebServices::connectSignalsForDownload(QNetworkReply *reply)
 {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+	connect(reply, &QNetworkReply::finished, this, &WebServices::downloadFinished);
+	connect(reply, &QNetworkReply::errorOccurred, this, &WebServices::downloadError);
+	connect(reply, &QNetworkReply::downloadProgress, this, &WebServices::updateProgress);
+#else
 	connect(reply, SIGNAL(finished()), this, SLOT(downloadFinished()));
 	connect(reply, SIGNAL(error(QNetworkReply::NetworkError)),
 		this, SLOT(downloadError(QNetworkReply::NetworkError)));
 	connect(reply, SIGNAL(downloadProgress(qint64, qint64)), this,
 		SLOT(updateProgress(qint64, qint64)));
-
+#endif
 	timeout.start(30000); // 30s
 }
 
@@ -308,10 +313,14 @@ void DivelogsDeWebServices::startDownload()
 	body.addQueryItem("pass", ui.password->text().replace("+", "%2b"));
 
 	reply = manager()->post(request, body.query(QUrl::FullyEncoded).toLatin1());
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+	connect(reply, &QNetworkReply::finished, this, &DivelogsDeWebServices::listDownloadFinished);
+	connect(reply, &QNetworkReply::errorOccurred, this, &DivelogsDeWebServices::downloadError);
+#else
 	connect(reply, SIGNAL(finished()), this, SLOT(listDownloadFinished()));
 	connect(reply, SIGNAL(error(QNetworkReply::NetworkError)),
 		this, SLOT(downloadError(QNetworkReply::NetworkError)));
-
+#endif
 	timeout.start(30000); // 30s
 }
 
@@ -454,13 +463,9 @@ void DivelogsDeWebServices::buttonClicked(QAbstractButton *button)
 			break;
 		}
 		/* parse file and import dives */
-		struct dive_table table = empty_dive_table;
-		struct trip_table trips = empty_trip_table;
-		struct dive_site_table sites = empty_dive_site_table;
-		struct device_table devices;
-		struct filter_preset_table filter_presets;
-		parse_file(QFile::encodeName(zipFile.fileName()), &table, &trips, &sites, &devices, &filter_presets);
-		Command::importDives(&table, &trips, &sites, &devices, nullptr, IMPORT_MERGE_ALL_TRIPS, QStringLiteral("divelogs.de"));
+		struct divelog log;
+		parse_file(QFile::encodeName(zipFile.fileName()), &log);
+		Command::importDives(&log, IMPORT_MERGE_ALL_TRIPS, QStringLiteral("divelogs.de"));
 
 		/* store last entered user/pass in config */
 		qPrefCloudStorage::set_divelogde_user(ui.userID->text());

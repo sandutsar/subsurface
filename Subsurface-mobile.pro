@@ -2,7 +2,7 @@ TEMPLATE = app
 
 QT += qml quick quickcontrols2 widgets positioning concurrent svg bluetooth 
 
-DEFINES += SUBSURFACE_MOBILE BT_SUPPORT BLE_SUPPORT
+DEFINES += SUBSURFACE_MOBILE BT_SUPPORT BLE_SUPPORT MAP_SUPPORT
 
 CONFIG += c++17
 CONFIG += qtquickcompiler
@@ -26,7 +26,7 @@ SOURCES += subsurface-mobile-main.cpp \
 	core/downloadfromdcthread.cpp \
 	core/qtserialbluetooth.cpp \
 	core/plannernotes.c \
-	core/uemis-downloader.c \
+	core/uemis-downloader.cpp \
 	core/qthelper.cpp \
 	core/checkcloudconnection.cpp \
 	core/color.cpp \
@@ -41,46 +41,49 @@ SOURCES += subsurface-mobile-main.cpp \
 	core/qt-init.cpp \
 	core/subsurfacesysinfo.cpp \
 	core/windowtitleupdate.cpp \
-	core/file.c \
+	core/file.cpp \
 	core/fulltext.cpp \
-	core/subsurfacestartup.c \
+	core/subsurfacestartup.cpp \
 	core/pref.c \
 	core/profile.c \
 	core/device.cpp \
-	core/dive.c \
+	core/dive.cpp \
 	core/divecomputer.c \
 	core/divefilter.cpp \
 	core/event.c \
+	core/eventtype.cpp \
 	core/filterconstraint.cpp \
 	core/filterpreset.cpp \
 	core/divelist.c \
+	core/divelog.cpp \
 	core/gas-model.c \
 	core/gaspressures.c \
-	core/git-access.c \
-	core/liquivision.c \
-	core/load-git.c \
-	core/parse-xml.c \
-	core/parse.c \
+	core/git-access.cpp \
+	core/globals.cpp \
+	core/liquivision.cpp \
+	core/load-git.cpp \
+	core/parse-xml.cpp \
+	core/parse.cpp \
 	core/picture.c \
 	core/pictureobj.cpp \
-	core/sample.c \
-	core/import-suunto.c \
-	core/import-shearwater.c \
-	core/import-seac.c \
-	core/import-cobalt.c \
-	core/import-divinglog.c \
-	core/import-csv.c \
+	core/sample.cpp \
+	core/import-suunto.cpp \
+	core/import-shearwater.cpp \
+	core/import-seac.cpp \
+	core/import-cobalt.cpp \
+	core/import-divinglog.cpp \
+	core/import-csv.cpp \
 	core/save-html.c \
 	core/statistics.c \
 	core/worldmap-save.c \
-	core/libdivecomputer.c \
+	core/libdivecomputer.cpp \
 	core/version.c \
-	core/save-git.c \
-	core/datatrak.c \
+	core/save-git.cpp \
+	core/datatrak.cpp \
 	core/ostctools.c \
 	core/planner.c \
-	core/save-xml.c \
-	core/cochran.c \
+	core/save-xml.cpp \
+	core/cochran.cpp \
 	core/deco.c \
 	core/divesite.c \
 	core/equipment.c \
@@ -92,7 +95,7 @@ SOURCES += subsurface-mobile-main.cpp \
 	core/strtod.c \
 	core/tag.c \
 	core/taxonomy.c \
-	core/time.c \
+	core/time.cpp \
 	core/trip.c \
 	core/units.c \
 	core/uemis.c \
@@ -199,11 +202,15 @@ HEADERS += \
 	core/dive.h \
 	core/divecomputer.h \
 	core/event.h \
+	core/eventtype.h \
 	core/extradata.h \
 	core/git-access.h \
+	core/globals.h \
+	core/owning_ptrs.h \
 	core/pref.h \
 	core/profile.h \
 	core/qthelper.h \
+	core/range.h \
 	core/save-html.h \
 	core/statistics.h \
 	core/units.h \
@@ -222,6 +229,7 @@ HEADERS += \
 	core/filterconstraint.h \
 	core/filterpreset.h \
 	core/divelist.h \
+	core/divelog.h \
 	core/divelogexportlogic.h \
 	core/divesitehelpers.h \
 	core/exif.h \
@@ -345,7 +353,7 @@ android {
 		core/serial_usb_android.cpp
 
 	# ironically, we appear to need to include the Kirigami shaders here
-	# as they aren't found when we assume that they are part of the
+	# as they are not found when we assume that they are part of the
 	# libkirigami library
 	RESOURCES += packaging/android/translations.qrc \
 		android-mobile/font.qrc \
@@ -396,7 +404,7 @@ android {
 ios {
 	SOURCES += core/ios.cpp
 	RESOURCES += packaging/ios/translations.qrc
-	QMAKE_IOS_DEPLOYMENT_TARGET = 10.0
+	QMAKE_IOS_DEPLOYMENT_TARGET = 12.0
 	QMAKE_TARGET_BUNDLE_PREFIX = org.subsurface-divelog
 	QMAKE_BUNDLE = subsurface-mobile
 	QMAKE_INFO_PLIST = packaging/ios/Info.plist
@@ -405,24 +413,32 @@ ios {
 	images.files = icons/subsurface-mobile-icon.png
 	QMAKE_BUNDLE_DATA += app_launch_images images
 
-	LIBS += ../install-root/ios/lib/libdivecomputer.a \
-		../install-root/ios/lib/libgit2.a \
-		../install-root/ios/lib/libzip.a \
-		../install-root/ios/lib/libxslt.a \
-		../install-root/ios/lib/qml/org/kde/kirigami.2/libkirigamiplugin.a \
+	OBJECTIVE_SOURCES += ios/ios-share.mm
+	HEADERS += ios/ios-share.h
+	Q_ENABLE_BITCODE.name = ENABLE_BITCODE
+	Q_ENABLE_BITCODE.value = NO
+	QMAKE_MAC_XCODE_SETTINGS += Q_ENABLE_BITCODE
+	ARCH_PATH = ../install-root/ios/$${ARCH}
+
+	LIBS += $${ARCH_PATH}/lib/libdivecomputer.a \
+		$${ARCH_PATH}/lib/libgit2.a \
+		$${ARCH_PATH}/lib/libzip.a \
+		$${ARCH_PATH}/lib/libxslt.a \
+		$${ARCH_PATH}/lib/qml/org/kde/kirigami.2/libkirigamiplugin.a \
 		../googlemaps-build/libqtgeoservices_googlemaps.a \
 		-liconv \
 		-lsqlite3 \
 		-lxml2
 
-	INCLUDEPATH += ../install-root/ios/include/ \
-		../install-root/lib/libzip/include \
-		../install-root/ios/include/libxstl \
-		../install-root/ios/include/libexstl \
-		../install-root/ios/include/openssl \
+	LIBS += -framework MessageUI
+
+	INCLUDEPATH += $${ARCH_PATH}/include/ \
+		$${ARCH_PATH}/include/libxstl \
+		$${ARCH_PATH}/include/libexstl \
+		$${ARCH_PATH}/include/openssl \
 		. \
 		./core \
 		./mobile-widgets/3rdparty/kirigami/src/libkirigami \
-		/usr/include/libxml2
+		$${ARCH_PATH}/include/libxml2
 
 }

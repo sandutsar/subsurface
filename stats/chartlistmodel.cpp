@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "chartlistmodel.h"
 #include "core/metrics.h"
-#include "core/qthelper.h"
 #include <QIcon>
 #include <QFontMetrics>
 #include <QPainter>
@@ -14,7 +13,7 @@ ChartListModel::ChartListModel() :
 	int fontHeight = fm.height();
 
 	int iconSize = fontHeight * 2;
-	warningPixmap = QPixmap::fromImage(renderSVGIcon(":chart-warning-icon", fontHeight, true));
+	warningPixmap = QPixmap(":chart-warning-icon").scaled(fontHeight, fontHeight, Qt::KeepAspectRatio);
 	initIcon(ChartSubType::Vertical, ":chart-bar-vertical-icon", iconSize);
 	initIcon(ChartSubType::VerticalGrouped, ":chart-bar-grouped-vertical-icon", iconSize);
 	initIcon(ChartSubType::VerticalStacked, ":chart-bar-stacked-vertical-icon", iconSize);
@@ -32,12 +31,12 @@ ChartListModel::~ChartListModel()
 
 void ChartListModel::initIcon(ChartSubType type, const char *name, int iconSize)
 {
-	QPixmap icon = QPixmap::fromImage(renderSVGIcon(name, iconSize, true));
+	QPixmap icon = QPixmap(name).scaled(iconSize, iconSize, Qt::KeepAspectRatio);
 	QPixmap iconWarning = icon.copy();
 	QPainter painter(&iconWarning);
 	painter.drawPixmap(0, 0, warningPixmap);
-	subTypeIcons[(size_t)type].normal = icon;
-	subTypeIcons[(size_t)type].warning = iconWarning;
+	subTypeIcons[(size_t)type].normal = std::move(icon);
+	subTypeIcons[(size_t)type].warning = std::move(iconWarning);
 }
 
 const QPixmap &ChartListModel::getIcon(ChartSubType type, bool warning) const

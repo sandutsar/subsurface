@@ -5,9 +5,11 @@
 #include "subsurface-string.h"
 #include "deco.h"
 #include "device.h"
-#include "divesite.h"
 #include "dive.h"
+#include "divelog.h"
+#include "divesite.h"
 #include "event.h"
+#include "eventtype.h"
 #include "filterpreset.h"
 #include "fulltext.h"
 #include "interpolate.h"
@@ -19,15 +21,6 @@
 #include "sample.h"
 #include "table.h"
 #include "trip.h"
-
-bool autogroup = false;
-
-void set_autogroup(bool value)
-{
-	/* if we keep the UI paradigm, this needs to toggle
-	 * the checkbox on the autogroup menu item */
-	autogroup = value;
-}
 
 /*
  * Get "maximal" dive gas for a dive.
@@ -48,17 +41,18 @@ void get_dive_gas(const struct dive *dive, int *o2_p, int *he_p, int *o2max_p)
 
 		if (!is_cylinder_used(dive, i))
 			continue;
+		if (cyl->cylinder_use == OXYGEN)
+			continue;
+		if (cyl->cylinder_use == NOT_USED)
+			continue;
 		if (o2 > maxo2)
 			maxo2 = o2;
-		if (he > maxhe)
-			goto newmax;
-		if (he < maxhe)
-			continue;
-		if (o2 <= maxo2)
-			continue;
-	newmax:
-		maxhe = he;
-		mino2 = o2;
+		if (o2 < mino2 && maxhe <= 0)
+			mino2 = o2;
+		if (he > maxhe) {
+			maxhe = he;
+			mino2 = o2;
+		}
 	}
 	/* All air? Show/sort as "air"/zero */
 	if ((!maxhe && maxo2 == O2_IN_AIR && mino2 == maxo2) ||
@@ -225,7 +219,7 @@ static int calculate_cns(struct dive *dive)
 		return dive->cns;
 
 	divenr = get_divenr(dive);
-	i = divenr >= 0 ? divenr : dive_table.nr;
+	i = divenr >= 0 ? divenr : divelog.dives->nr;
 #if DECO_CALC_DEBUG & 2
 	if (i >= 0 && i < dive_table.nr)
 		printf("\n\n*** CNS for dive #%d %d\n", i, get_dive(i)->number);
@@ -233,7 +227,7 @@ static int calculate_cns(struct dive *dive)
 		printf("\n\n*** CNS for dive #%d\n", i);
 #endif
 	/* Look at next dive in dive list table and correct i when needed */
-	while (i < dive_table.nr - 1) {
+	while (i < divelog.dives->nr - 1) {
 		struct dive *pdive = get_dive(i);
 		if (!pdive || pdive->when > dive->when)
 			break;
@@ -278,7 +272,7 @@ static int calculate_cns(struct dive *dive)
 #endif
 	}
 	/* Walk forward and add dives and surface intervals to CNS */
-	while (++i < dive_table.nr) {
+	while (++i < divelog.dives->nr) {
 #if DECO_CALC_DEBUG & 2
 		printf("Check if dive #%d %d will be really added to CNS calc: ", i, get_dive(i)->number);
 #endif
@@ -462,7 +456,7 @@ int init_decompression(struct deco_state *ds, const struct dive *dive, bool in_p
 		return false;
 
 	divenr = get_divenr(dive);
-	i = divenr >= 0 ? divenr : dive_table.nr;
+	i = divenr >= 0 ? divenr : divelog.dives->nr;
 #if DECO_CALC_DEBUG & 2
 	if (i >= 0 && i < dive_table.nr)
 		printf("\n\n*** Init deco for dive #%d %d\n", i, get_dive(i)->number);
@@ -470,7 +464,7 @@ int init_decompression(struct deco_state *ds, const struct dive *dive, bool in_p
 		printf("\n\n*** Init deco for dive #%d\n", i);
 #endif
 	/* Look at next dive in dive list table and correct i when needed */
-	while (i < dive_table.nr - 1) {
+	while (i < divelog.dives->nr - 1) {
 		struct dive *pdive = get_dive(i);
 		if (!pdive || pdive->when > dive->when)
 			break;
@@ -515,7 +509,7 @@ int init_decompression(struct deco_state *ds, const struct dive *dive, bool in_p
 #endif
 	}
 	/* Walk forward an add dives and surface intervals to deco */
-	while (++i < dive_table.nr) {
+	while (++i < divelog.dives->nr) {
 #if DECO_CALC_DEBUG & 2
 		printf("Check if dive #%d %d will be really added to deco calc: ", i, get_dive(i)->number);
 #endif
@@ -565,7 +559,7 @@ int init_decompression(struct deco_state *ds, const struct dive *dive, bool in_p
 #endif
 				return surface_time;
 			}
-			add_segment(ds, surface_pressure, air, surface_time, 0, dive->dc.divemode, prefs.decosac, in_planner);
+			add_segment(ds, surface_pressure, air, surface_time, 0, OC, prefs.decosac, in_planner);
 #if DECO_CALC_DEBUG & 2
 			printf("Tissues after surface intervall of %d:%02u:\n", FRACTION(surface_time, 60));
 			dump_tissues(ds);
@@ -602,7 +596,7 @@ int init_decompression(struct deco_state *ds, const struct dive *dive, bool in_p
 #endif
 			return surface_time;
 		}
-		add_segment(ds, surface_pressure, air, surface_time, 0, dive->dc.divemode, prefs.decosac, in_planner);
+		add_segment(ds, surface_pressure, air, surface_time, 0, OC, prefs.decosac, in_planner);
 #if DECO_CALC_DEBUG & 2
 		printf("Tissues after surface intervall of %d:%02u:\n", FRACTION(surface_time, 60));
 		dump_tissues(ds);
@@ -622,36 +616,6 @@ void update_cylinder_related_info(struct dive *dive)
 		if (dive->maxcns == 0)
 			dive->maxcns = calculate_cns(dive);
 	}
-}
-
-#define MAX_GAS_STRING 80
-
-/* callers needs to free the string */
-char *get_dive_gas_string(const struct dive *dive)
-{
-	int o2, he, o2max;
-	char *buffer = malloc(MAX_GAS_STRING);
-
-	if (buffer) {
-		get_dive_gas(dive, &o2, &he, &o2max);
-		o2 = (o2 + 5) / 10;
-		he = (he + 5) / 10;
-		o2max = (o2max + 5) / 10;
-
-		if (he)
-			if (o2 == o2max)
-				snprintf(buffer, MAX_GAS_STRING, "%d/%d", o2, he);
-			else
-				snprintf(buffer, MAX_GAS_STRING, "%d/%d…%d%%", o2, he, o2max);
-		else if (o2)
-			if (o2 == o2max)
-				snprintf(buffer, MAX_GAS_STRING, "%d%%", o2);
-			else
-				snprintf(buffer, MAX_GAS_STRING, "%d…%d%%", o2, o2max);
-		else
-			strcpy(buffer, translate("gettextFromC", "air"));
-	}
-	return buffer;
 }
 
 /* Like strcmp(), but don't crash on null-pointers */
@@ -752,7 +716,7 @@ static void autogroup_dives(struct dive_table *table, struct trip_table *trip_ta
 	int i, j;
 	bool alloc;
 
-	if (!autogroup)
+	if (!divelog.autogroup)
 		return;
 
 	for (i = 0; (trip = get_dives_to_autogroup(table, i, &from, &to, &alloc)) != NULL; i = to) {
@@ -796,7 +760,7 @@ struct dive *unregister_dive(int idx)
 	/* When removing a dive from the global dive table,
 	 * we also have to unregister its fulltext cache. */
 	fulltext_unregister(dive);
-	remove_from_dive_table(&dive_table, idx);
+	remove_from_dive_table(divelog.dives, idx);
 	if (dive->selected)
 		amount_selected--;
 	dive->selected = false;
@@ -810,20 +774,18 @@ void delete_single_dive(int idx)
 	struct dive *dive = get_dive(idx);
 	if (!dive)
 		return; /* this should never happen */
-	if (dive->selected)
-		deselect_dive(dive);
-	remove_dive_from_trip(dive, &trip_table);
+	remove_dive_from_trip(dive, divelog.trips);
 	unregister_dive_from_dive_site(dive);
-	delete_dive_from_table(&dive_table, idx);
+	delete_dive_from_table(divelog.dives, idx);
 }
 
 void process_loaded_dives()
 {
-	sort_dive_table(&dive_table);
-	sort_trip_table(&trip_table);
+	sort_dive_table(divelog.dives);
+	sort_trip_table(divelog.trips);
 
 	/* Autogroup dives if desired by user. */
-	autogroup_dives(&dive_table, &trip_table);
+	autogroup_dives(divelog.dives, divelog.trips);
 
 	fulltext_populate();
 
@@ -905,9 +867,9 @@ static bool try_to_merge_into(struct dive *dive_to_add, int idx, struct dive_tab
 /* Check if a dive is ranked after the last dive of the global dive list */
 static bool dive_is_after_last(struct dive *d)
 {
-	if (dive_table.nr == 0)
+	if (divelog.dives->nr == 0)
 		return true;
-	return dive_less_than(dive_table.dives[dive_table.nr - 1], d);
+	return dive_less_than(divelog.dives->dives[divelog.dives->nr - 1], d);
 }
 
 /* Merge dives from "dives_from" into "dives_to". Overlapping dives will be merged,
@@ -996,9 +958,7 @@ static bool merge_dive_tables(struct dive_table *dives_from, struct dive_table *
 /* Merge the dives of the trip "from" and the dive_table "dives_from" into the trip "to"
  * and dive_table "dives_to". If "prefer_imported" is true, dive data of "from" takes
  * precedence */
-void add_imported_dives(struct dive_table *import_table, struct trip_table *import_trip_table,
-			struct dive_site_table *import_sites_table, struct device_table *import_device_table,
-			int flags)
+void add_imported_dives(struct divelog *import_log, int flags)
 {
 	int i, idx;
 	struct dive_table dives_to_add = empty_dive_table;
@@ -1009,9 +969,11 @@ void add_imported_dives(struct dive_table *import_table, struct trip_table *impo
 
 	/* Process imported dives and generate lists of dives
 	 * to-be-added and to-be-removed */
-	process_imported_dives(import_table, import_trip_table, import_sites_table, import_device_table,
-			       flags, &dives_to_add, &dives_to_remove, &trips_to_add,
+	process_imported_dives(import_log, flags, &dives_to_add, &dives_to_remove, &trips_to_add,
 			       &dive_sites_to_add, devices_to_add);
+
+	/* Start by deselecting all dives, so that we don't end up with an invalid selection */
+	select_single_dive(NULL);
 
 	/* Add new dives to trip and site to get reference count correct. */
 	for (i = 0; i < dives_to_add.nr; i++) {
@@ -1033,12 +995,12 @@ void add_imported_dives(struct dive_table *import_table, struct trip_table *impo
 
 	/* Add new dives */
 	for (i = 0; i < dives_to_add.nr; i++)
-		insert_dive(&dive_table, dives_to_add.dives[i]);
+		insert_dive(divelog.dives, dives_to_add.dives[i]);
 	dives_to_add.nr = 0;
 
 	/* Add new trips */
 	for (i = 0; i < trips_to_add.nr; i++)
-		insert_trip(trips_to_add.trips[i], &trip_table);
+		insert_trip(trips_to_add.trips[i], divelog.trips);
 	trips_to_add.nr = 0;
 
 	/* Add new dive sites */
@@ -1049,12 +1011,12 @@ void add_imported_dives(struct dive_table *import_table, struct trip_table *impo
 	/* Add new devices */
 	for (i = 0; i < nr_devices(devices_to_add); i++) {
 		const struct device *dev = get_device(devices_to_add, i);
-		add_to_device_table(&device_table, dev);
+		add_to_device_table(divelog.devices, dev);
 	}
 
 	/* We might have deleted the old selected dive.
 	 * Choose the newest dive as selected (if any) */
-	current_dive = dive_table.nr > 0 ? dive_table.dives[dive_table.nr - 1] : NULL;
+	current_dive = divelog.dives->nr > 0 ? divelog.dives->dives[divelog.dives->nr - 1] : NULL;
 
 	free_device_table(devices_to_add);
 
@@ -1080,8 +1042,8 @@ bool try_to_merge_trip(struct dive_trip *trip_import, struct dive_table *import_
 	int i;
 	struct dive_trip *trip_old;
 
-	for (i = 0; i < trip_table.nr; i++) {
-		trip_old = trip_table.trips[i];
+	for (i = 0; i < divelog.trips->nr; i++) {
+		trip_old = divelog.trips->trips[i];
 		if (trips_overlap(trip_import, trip_old)) {
 			*sequence_changed |= merge_dive_tables(&trip_import->dives, import_table, &trip_old->dives,
 							       prefer_imported, trip_old,
@@ -1128,9 +1090,7 @@ bool try_to_merge_trip(struct dive_trip *trip_import, struct dive_table *import_
  * - If IMPORT_ADD_TO_NEW_TRIP is true, dives that are not assigned
  *   to a trip will be added to a newly generated trip.
  */
-void process_imported_dives(struct dive_table *import_table, struct trip_table *import_trip_table,
-			    struct dive_site_table *import_sites_table, struct device_table *import_device_table,
-			    int flags,
+void process_imported_dives(struct divelog *import_log, int flags,
 			    /* output parameters: */
 			    struct dive_table *dives_to_add, struct dive_table *dives_to_remove,
 			    struct trip_table *trips_to_add, struct dive_site_table *sites_to_add,
@@ -1142,13 +1102,6 @@ void process_imported_dives(struct dive_table *import_table, struct trip_table *
 	bool new_dive_has_number = false;
 	bool last_old_dive_is_numbered;
 
-	/* If the caller didn't pass an import_trip_table because all
-	 * dives are tripless, provide a local table. This may be
-	 * necessary if the trips are autogrouped */
-	struct trip_table local_trip_table = empty_trip_table;
-	if (!import_trip_table)
-		import_trip_table = &local_trip_table;
-
 	/* Make sure that output parameters don't contain garbage */
 	clear_dive_table(dives_to_add);
 	clear_dive_table(dives_to_remove);
@@ -1159,45 +1112,45 @@ void process_imported_dives(struct dive_table *import_table, struct trip_table *
 	/* Check if any of the new dives has a number. This will be
 	 * important later to decide if we want to renumber the added
 	 * dives */
-	for (int i = 0; i < import_table->nr; i++) {
-		if (import_table->dives[i]->number > 0) {
+	for (int i = 0; i < import_log->dives->nr; i++) {
+		if (import_log->dives->dives[i]->number > 0) {
 			new_dive_has_number = true;
 			break;
 		}
 	}
 
 	/* If no dives were imported, don't bother doing anything */
-	if (!import_table->nr)
+	if (!import_log->dives->nr)
 		return;
 
 	/* Add only the devices that we don't know about yet. */
-	for (i = 0; i < nr_devices(import_device_table); i++) {
-		const struct device *dev = get_device(import_device_table, i);
-		if (!device_exists(&device_table, dev))
+	for (i = 0; i < nr_devices(import_log->devices); i++) {
+		const struct device *dev = get_device(import_log->devices, i);
+		if (!device_exists(divelog.devices, dev))
 			add_to_device_table(devices_to_add, dev);
 	}
 
 	/* Sort the table of dives to be imported and combine mergable dives */
-	sort_dive_table(import_table);
-	merge_imported_dives(import_table);
+	sort_dive_table(import_log->dives);
+	merge_imported_dives(import_log->dives);
 
 	/* Autogroup tripless dives if desired by user. But don't autogroup
 	 * if tripless dives should be added to a new trip. */
 	if (!(flags & IMPORT_ADD_TO_NEW_TRIP))
-		autogroup_dives(import_table, import_trip_table);
+		autogroup_dives(import_log->dives, import_log->trips);
 
 	/* If dive sites already exist, use the existing versions. */
-	for (i = 0; i  < import_sites_table->nr; i++) {
-		struct dive_site *new_ds = import_sites_table->dive_sites[i];
+	for (i = 0; i  < import_log->sites->nr; i++) {
+		struct dive_site *new_ds = import_log->sites->dive_sites[i];
 		struct dive_site *old_ds = get_same_dive_site(new_ds);
 
 		/* Check if it dive site is actually used by new dives. */
-		for (j = 0; j < import_table->nr; j++) {
-			if (import_table->dives[j]->dive_site == new_ds)
+		for (j = 0; j < import_log->dives->nr; j++) {
+			if (import_log->dives->dives[j]->dive_site == new_ds)
 				break;
 		}
 
-		if (j == import_table->nr) {
+		if (j == import_log->dives->nr) {
 			/* Dive site not even used - free it and go to next. */
 			free_dive_site(new_ds);
 			continue;
@@ -1210,22 +1163,22 @@ void process_imported_dives(struct dive_table *import_table, struct trip_table *
 			continue;
 		}
 		/* Dive site already exists - use the old and free the new. */
-		for (j = 0; j < import_table->nr; j++) {
-			if (import_table->dives[j]->dive_site == new_ds)
-				import_table->dives[j]->dive_site = old_ds;
+		for (j = 0; j < import_log->dives->nr; j++) {
+			if (import_log->dives->dives[j]->dive_site == new_ds)
+				import_log->dives->dives[j]->dive_site = old_ds;
 		}
 		free_dive_site(new_ds);
 	}
-	import_sites_table->nr = 0; /* All dive sites were consumed */
+	import_log->sites->nr = 0; /* All dive sites were consumed */
 
 	/* Merge overlapping trips. Since both trip tables are sorted, we
 	 * could be smarter here, but realistically not a whole lot of trips
 	 * will be imported so do a simple n*m loop until someone complains.
 	 */
-	for (i = 0; i < import_trip_table->nr; i++) {
-		trip_import = import_trip_table->trips[i];
+	for (i = 0; i < import_log->trips->nr; i++) {
+		trip_import = import_log->trips->trips[i];
 		if ((flags & IMPORT_MERGE_ALL_TRIPS) || trip_import->autogen) {
-			if (try_to_merge_trip(trip_import, import_table, flags & IMPORT_PREFER_IMPORTED, dives_to_add, dives_to_remove,
+			if (try_to_merge_trip(trip_import, import_log->dives, flags & IMPORT_PREFER_IMPORTED, dives_to_add, dives_to_remove,
 					      &sequence_changed, &start_renumbering_at))
 				continue;
 		}
@@ -1239,34 +1192,34 @@ void process_imported_dives(struct dive_table *import_table, struct trip_table *
 			insert_dive(dives_to_add, d);
 			sequence_changed |= !dive_is_after_last(d);
 
-			remove_dive(d, import_table);
+			remove_dive(d, import_log->dives);
 		}
 
 		/* Then, add trip to list of trips to add */
 		insert_trip(trip_import, trips_to_add);
 		trip_import->dives.nr = 0; /* Caller is responsible for adding dives to trip */
 	}
-	import_trip_table->nr = 0; /* All trips were consumed */
+	import_log->trips->nr = 0; /* All trips were consumed */
 
-	if ((flags & IMPORT_ADD_TO_NEW_TRIP) && import_table->nr > 0) {
+	if ((flags & IMPORT_ADD_TO_NEW_TRIP) && import_log->dives->nr > 0) {
 		/* Create a new trip for unassigned dives, if desired. */
-		new_trip = create_trip_from_dive(import_table->dives[0]);
+		new_trip = create_trip_from_dive(import_log->dives->dives[0]);
 		insert_trip(new_trip, trips_to_add);
 
 		/* Add all remaining dives to this trip */
-		for (i = 0; i < import_table->nr; i++) {
-			struct dive *d = import_table->dives[i];
+		for (i = 0; i < import_log->dives->nr; i++) {
+			struct dive *d = import_log->dives->dives[i];
 			d->divetrip = new_trip;
 			insert_dive(dives_to_add, d);
 			sequence_changed |= !dive_is_after_last(d);
 		}
 
-		import_table->nr = 0; /* All dives were consumed */
-	} else if (import_table->nr > 0) {
-		/* The remaining dives in import_table are those that don't belong to
+		import_log->dives->nr = 0; /* All dives were consumed */
+	} else if (import_log->dives->nr > 0) {
+		/* The remaining dives in import_log->dives are those that don't belong to
 		 * a trip and the caller does not want them to be associated to a
 		 * new trip. Merge them into the global table. */
-		sequence_changed |= merge_dive_tables(import_table, NULL, &dive_table, flags & IMPORT_PREFER_IMPORTED, NULL,
+		sequence_changed |= merge_dive_tables(import_log->dives, NULL, divelog.dives, flags & IMPORT_PREFER_IMPORTED, NULL,
 						      dives_to_add, dives_to_remove, &start_renumbering_at);
 	}
 
@@ -1275,13 +1228,13 @@ void process_imported_dives(struct dive_table *import_table, struct trip_table *
 	 *	- The last dive in the old dive table had a number itself (if there is a last dive).
 	 *	- None of the new dives has a number.
 	 */
-	last_old_dive_is_numbered = dive_table.nr == 0 || dive_table.dives[dive_table.nr - 1]->number > 0;
+	last_old_dive_is_numbered = divelog.dives->nr == 0 || divelog.dives->dives[divelog.dives->nr - 1]->number > 0;
 
 	/* We counted the number of merged dives that were added to dives_to_add.
 	 * Skip those. Since sequence_changed is false all added dives are *after*
 	 * all merged dives. */
 	if (!sequence_changed && last_old_dive_is_numbered && !new_dive_has_number) {
-		nr = dive_table.nr > 0 ? dive_table.dives[dive_table.nr - 1]->number : 0;
+		nr = divelog.dives->nr > 0 ? divelog.dives->dives[divelog.dives->nr - 1]->number : 0;
 		for (i = start_renumbering_at; i < dives_to_add->nr; i++)
 			dives_to_add->dives[i]->number = ++nr;
 	}
@@ -1290,9 +1243,9 @@ void process_imported_dives(struct dive_table *import_table, struct trip_table *
 static struct dive *get_last_valid_dive()
 {
 	int i;
-	for (i = dive_table.nr - 1; i >= 0; i--) {
-		if (!dive_table.dives[i]->invalid)
-			return dive_table.dives[i];
+	for (i = divelog.dives->nr - 1; i >= 0; i--) {
+		if (!divelog.dives->dives[i]->invalid)
+			return divelog.dives->dives[i];
 	}
 	return NULL;
 }
@@ -1306,21 +1259,12 @@ static struct dive *get_last_valid_dive()
  */
 int get_dive_nr_at_idx(int idx)
 {
-	if (idx < dive_table.nr)
+	if (idx < divelog.dives->nr)
 		return 0;
 	struct dive *last_dive = get_last_valid_dive();
 	if (!last_dive)
 		return 1;
 	return last_dive->number ? last_dive->number + 1 : 0;
-}
-
-void set_dive_nr_for_current_dive()
-{
-	int selected_dive = get_divenr(current_dive);
-	if (dive_table.nr == 1)
-		current_dive->number = 1;
-	else if (selected_dive == dive_table.nr - 1 && get_dive(dive_table.nr - 2)->number)
-		current_dive->number = get_dive(dive_table.nr - 2)->number + 1;
 }
 
 static int min_datafile_version;
@@ -1344,27 +1288,27 @@ void report_datafile_version(int version)
 int get_dive_id_closest_to(timestamp_t when)
 {
 	int i;
-	int nr = dive_table.nr;
+	int nr = divelog.dives->nr;
 
 	// deal with pathological cases
 	if (nr == 0)
 		return 0;
 	else if (nr == 1)
-		return dive_table.dives[0]->id;
+		return divelog.dives->dives[0]->id;
 
-	for (i = 0; i < nr && dive_table.dives[i]->when <= when; i++)
+	for (i = 0; i < nr && divelog.dives->dives[i]->when <= when; i++)
 		; // nothing
 
 	// again, capture the two edge cases first
 	if (i == nr)
-		return dive_table.dives[i - 1]->id;
+		return divelog.dives->dives[i - 1]->id;
 	else if (i == 0)
-		return dive_table.dives[0]->id;
+		return divelog.dives->dives[0]->id;
 
-	if (when - dive_table.dives[i - 1]->when < dive_table.dives[i]->when - when)
-		return dive_table.dives[i - 1]->id;
+	if (when - divelog.dives->dives[i - 1]->when < divelog.dives->dives[i]->when - when)
+		return divelog.dives->dives[i - 1]->id;
 	else
-		return dive_table.dives[i]->id;
+		return divelog.dives->dives[i]->id;
 }
 
 void clear_dive_file_data()
@@ -1372,20 +1316,10 @@ void clear_dive_file_data()
 	fulltext_unregister_all();
 	select_single_dive(NULL);	// This is propagate up to the UI and clears all the information.
 
-	while (dive_table.nr)
-		delete_single_dive(0);
 	current_dive = NULL;
-	while (dive_site_table.nr)
-		delete_dive_site(get_dive_site(0, &dive_site_table), &dive_site_table);
-	if (trip_table.nr != 0) {
-		fprintf(stderr, "Warning: trip table not empty in clear_dive_file_data()!\n");
-		trip_table.nr = 0;
-	}
+	clear_divelog(&divelog);
 
-	clear_dive(&displayed_dive);
-	clear_device_table(&device_table);
-	clear_events();
-	clear_filter_presets();
+	clear_event_types();
 
 	reset_min_datafile_version();
 	clear_git_id();
@@ -1456,14 +1390,14 @@ timestamp_t get_surface_interval(timestamp_t when)
 	timestamp_t prev_end;
 
 	/* find previous dive. might want to use a binary search. */
-	for (i = dive_table.nr - 1; i >= 0; --i) {
-		if (dive_table.dives[i]->when < when)
+	for (i = divelog.dives->nr - 1; i >= 0; --i) {
+		if (divelog.dives->dives[i]->when < when)
 			break;
 	}
 	if (i < 0)
 		return -1;
 
-	prev_end = dive_endtime(dive_table.dives[i]);
+	prev_end = dive_endtime(divelog.dives->dives[i]);
 	if (prev_end > when)
 		return 0;
 	return when - prev_end;
@@ -1475,11 +1409,11 @@ struct dive *find_next_visible_dive(timestamp_t when)
 {
 	int i, j;
 
-	if (!dive_table.nr)
+	if (!divelog.dives->nr)
 		return NULL;
 
 	/* we might want to use binary search here */
-	for (i = 0; i < dive_table.nr; i++) {
+	for (i = 0; i < divelog.dives->nr; i++) {
 		if (when <= get_dive(i)->when)
 			break;
 	}
@@ -1489,7 +1423,7 @@ struct dive *find_next_visible_dive(timestamp_t when)
 			return get_dive(j);
 	}
 
-	for (j = i; j < dive_table.nr; j++) {
+	for (j = i; j < divelog.dives->nr; j++) {
 		if (!get_dive(j)->hidden_by_filter)
 			return get_dive(j);
 	}

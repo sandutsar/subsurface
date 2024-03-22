@@ -13,7 +13,6 @@
 */
 
 #include <QTreeView>
-#include <QLineEdit>
 #include <QNetworkAccessManager>
 #include "qt-models/divetripmodel.h"
 #include "core/subsurface-qt/divelistnotifier.h"
@@ -30,7 +29,8 @@ public:
 	void loadImages();
 	void loadWebImages();
 signals:
-	void divesSelected();
+	// currentDC = -1: don't change dc number.
+	void divesSelected(const std::vector<dive *> &dives, dive *currentDive, int currentDC);
 public
 slots:
 	void settingsChanged();
@@ -52,19 +52,14 @@ slots:
 	void renumberDives();
 	void addDivesToTrip();
 	void shiftTimes();
-	void diveSelectionChanged(const QVector<QModelIndex> &indices);
-	void currentDiveChanged(QModelIndex index);
-	void tripChanged(dive_trip *trip, TripField);
+	void divesSelectedSlot(const QVector<QModelIndex> &indices, QModelIndex currentDive, int currentDC);
+	void tripSelected(QModelIndex trip, QModelIndex currentDive);
 private:
 	void rowsInserted(const QModelIndex &parent, int start, int end) override;
 	void reset() override;
-	void setSelection(const QRect &rect, QItemSelectionModel::SelectionFlags flags) override;
-	void unselectDives();
-	void mouseReleaseEvent(QMouseEvent *event) override;
-	void keyPressEvent(QKeyEvent *event) override;
-	void selectAll() override;
-	void selectionChanged(const QItemSelection &selected, const QItemSelection &deselected);
-	void selectionChangeDone();
+	void selectionChanged(const QItemSelection &selected, const QItemSelection &deselected) override;
+	void selectDiveSitesOnMap(const std::vector<dive *> &dives);
+	void selectTripItems(QModelIndex index);
 	DiveTripModelBase::Layout currentLayout;
 	QModelIndex contextMenuIndex;
 	// Remember the initial column widths, to avoid writing unchanged widths to the settings
@@ -78,11 +73,11 @@ private:
 	void restoreExpandedRows(const std::vector<int> &);
 	int lastVisibleColumn();
 	void selectTrip(dive_trip *trip);
-	void updateLastImageTimeOffset(int offset);
+	void updateLastImageTimeOffset(timestamp_t offset);
 	int lastImageTimeOffset();
 	void addToTrip(int delta);
-	void matchImagesToDives(QStringList fileNames);
-	void loadImageFromURL(QUrl url);
+	void matchImagesToDives(const QStringList &fileNames);
+	void loadImagesFromURLs(const QString &urls);
 	bool eventFilter(QObject *, QEvent *) override;
 	void mouseDoubleClickEvent(QMouseEvent *event) override;
 	void contextMenuEvent(QContextMenuEvent *event) override;

@@ -2,12 +2,12 @@
 #include "device.h"
 #include "dive.h"
 #include "divelist.h"
+#include "divelog.h"
 #include "subsurface-string.h"
 #include "errorhelper.h" // for verbose flag
 #include "selection.h"
 #include "core/settings/qPrefDiveComputer.h"
 
-struct device_table device_table;
 struct fingerprint_table fingerprint_table;
 
 static bool same_device(const device &dev1, const device &dev2)
@@ -81,7 +81,7 @@ static int addDC(std::vector<device> &dcs, const std::string &m, const std::stri
 		return it - dcs.begin();
 	} else {
 		dev.deviceId = calculate_string_hash(s.c_str());
-		dcs.insert(it, dev);
+		it = dcs.insert(it, dev);
 		return it - dcs.begin();
 	}
 }
@@ -140,7 +140,7 @@ extern "C" int is_default_dive_computer_device(const char *name)
 
 const char *get_dc_nickname(const struct divecomputer *dc)
 {
-	const device *existNode = get_device_for_dc(&device_table, dc);
+	const device *existNode = get_device_for_dc(divelog.devices, dc);
 
 	if (existNode && !existNode->nickName.empty())
 		return existNode->nickName.c_str();
@@ -286,12 +286,20 @@ extern "C" uint32_t fp_get_diveid(struct fingerprint_table *table, unsigned int 
 	return table->fingerprints[i].fdiveid;
 }
 
-extern "C" char *fp_get_data(struct fingerprint_table *table, unsigned int i)
+static char to_hex_digit(unsigned char d)
+{
+	return d <= 9 ? d + '0' : d - 10 + 'a';
+}
+
+std::string fp_get_data(struct fingerprint_table *table, unsigned int i)
 {
 	if (!table || i >= table->fingerprints.size())
-		return 0;
+		return std::string();
 	struct fingerprint_record *fpr = &table->fingerprints[i];
-	// fromRawData() avoids one copy of the raw_data
-	QByteArray hex = QByteArray::fromRawData((char *)fpr->raw_data, fpr->fsize).toHex();
-	return strdup(hex.constData());
+	std::string res(fpr->fsize * 2, ' ');
+	for (unsigned int i = 0; i < fpr->fsize; ++i) {
+		res[2 * i] = to_hex_digit((fpr->raw_data[i] >> 4) & 0xf);
+		res[2 * i + 1] = to_hex_digit(fpr->raw_data[i] & 0xf);
+	}
+	return res;
 }

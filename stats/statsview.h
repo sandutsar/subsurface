@@ -6,7 +6,6 @@
 #include "statshelper.h"
 #include "statsselection.h"
 #include <memory>
-#include <QFont>
 #include <QImage>
 #include <QPainter>
 #include <QQuickItem>
@@ -29,6 +28,7 @@ class QuartileMarker;
 class RegressionItem;
 class StatsAxis;
 class StatsGrid;
+class StatsTheme;
 class Legend;
 class QSGTexture;
 class RootNode;	// Internal implementation detail
@@ -53,6 +53,8 @@ public:
 	QQuickWindow *w() const;			// Make window available to items
 	QSizeF size() const;
 	QRectF plotArea() const;
+	void setTheme(bool dark);			// Chart must be replot for theme to become effective.
+	const StatsTheme &getCurrentTheme() const;
 	void addQSGNode(QSGNode *node, ChartZValue z);	// Must only be called in render thread!
 	void registerChartItem(ChartItem &item);
 	void registerDirtyChartItem(ChartItem &item);
@@ -140,7 +142,7 @@ private:
 	void addLineMarker(double pos, double low, double high, const QPen &pen, bool isHorizontal);
 
 	StatsState state;
-	QFont titleFont;
+	const StatsTheme *currentTheme;
 	std::vector<std::unique_ptr<StatsSeries>> series;
 	std::unique_ptr<StatsGrid> grid;
 	std::vector<ChartItemPtr<QuartileMarker>> quartileMarkers;

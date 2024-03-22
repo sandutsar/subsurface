@@ -44,7 +44,6 @@ QString localFilePath(const QString &originalFilename);
 int getCloudURL(QString &filename);
 bool parseGpsText(const QString &gps_text, double *latitude, double *longitude);
 void init_proxy();
-QString getUUID();
 QStringList getWaterTypesAsString();
 extern const QStringList videoExtensionsList;
 QStringList mediaExtensionFilters();
@@ -85,6 +84,7 @@ QString render_seconds_to_string(int seconds);
 QString get_dive_duration_string(timestamp_t when, QString hoursText, QString minutesText, QString secondsText = gettextFromC::tr("sec"), QString separator = ":", bool isFreeDive = false);
 QString get_dive_surfint_string(timestamp_t when, QString daysText, QString hoursText, QString minutesText, QString separator = " ", int maxdays = 4);
 QString get_dive_date_string(timestamp_t when);
+std::string get_dive_date_c_string(timestamp_t when);
 QString get_first_dive_date_string();
 QString get_last_dive_date_string();
 QString get_short_dive_date_string(timestamp_t when);
@@ -94,13 +94,15 @@ QLocale getLocale();
 QVector<QPair<QString, int>> selectedDivesGasUsed();
 QString getUserAgent();
 QString printGPSCoords(const location_t *loc);
+std::string printGPSCoordsC(const location_t *loc);
 std::vector<int> get_cylinder_map_for_remove(int count, int n);
 std::vector<int> get_cylinder_map_for_add(int count, int n);
-QImage renderSVGIcon(const char *id, int size, bool transparent);
-QImage renderSVGIconWidth(const char *id, int size);
 
 extern QString (*changesCallback)();
 void uiNotification(const QString &msg);
+std::string get_changes_made();
+std::string subsurface_user_agent();
+std::string normalize_cloud_name(const char *remote_in);
 
 #if defined __APPLE__
 #define TITLE_OR_TEXT(_t, _m) "", _t + "\n" + _m
@@ -108,31 +110,6 @@ void uiNotification(const QString &msg);
 #define TITLE_OR_TEXT(_t, _m) _t, _m
 #endif
 
-// Move a range in a vector to a different position.
-// The parameters are given according to the usual STL-semantics:
-//	v: a container with STL-like random access iterator via std::begin(...)
-//	rangeBegin: index of first element
-//	rangeEnd: index one *past* last element
-//	destination: index to element before which the range will be moved
-// Owing to std::begin() magic, this function works with STL-like containers:
-//	QVector<int> v{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
-//	moveInVector(v, 1, 4, 6);
-// as well as with C-style arrays:
-//	int array[10] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
-//	moveInVector(array, 1, 4, 6);
-// Both calls will have the following effect:
-//	Before: 0 1 2 3 4 5 6 7 8 9
-//	After:  0 4 5 1 2 3 6 7 8 9
-// No sanitizing of the input arguments is performed.
-template <typename Vector>
-void moveInVector(Vector &v, int rangeBegin, int rangeEnd, int destination)
-{
-	auto it = std::begin(v);
-	if (destination > rangeEnd)
-		std::rotate(it + rangeBegin, it + rangeEnd, it + destination);
-	else if (destination < rangeBegin)
-		std::rotate(it + destination, it + rangeBegin, it + rangeEnd);
-}
 #endif
 
 // 3) Functions visible to C and C++
@@ -141,9 +118,10 @@ void moveInVector(Vector &v, int rangeBegin, int rangeEnd, int destination)
 extern "C" {
 #endif
 
-char *printGPSCoordsC(const location_t *loc);
+struct git_info;
+
 bool getProxyString(char **buffer);
-bool canReachCloudServer(const char **remote);
+bool canReachCloudServer(struct git_info *);
 void updateWindowTitle();
 void subsurface_mkdir(const char *dir);
 char *get_file_name(const char *fileName);
@@ -152,10 +130,8 @@ void copy_image_and_overwrite(const char *cfileName, const char *path, const cha
 char *move_away(const char *path);
 const char *local_file_path(struct picture *picture);
 char *cloud_url();
-const char *normalize_cloud_name(const char *remote_in);
 char *hashfile_name_string();
 char *picturedir_string();
-const char *subsurface_user_agent();
 enum deco_mode decoMode(bool in_planner);
 void parse_seabear_header(const char *filename, struct xml_params *params);
 char *get_current_date();
@@ -169,20 +145,10 @@ depth_t string_to_depth(const char *str);
 pressure_t string_to_pressure(const char *str);
 volume_t string_to_volume(const char *str, pressure_t workp);
 fraction_t string_to_fraction(const char *str);
-char *get_changes_made();
 void emit_reset_signal();
 
 #ifdef __cplusplus
 }
-#endif
-
-// 4) SSRF_INFO macro to replace fprintf calls in our code
-//    (originally based on logging bits from libdivecomputer)
-#if !defined(Q_OS_ANDROID) && !defined(__ANDROID__)
-#define SSRF_INFO(fmt, ...)	fprintf(stderr, "INFO: " fmt "\n", ##__VA_ARGS__)
-#else
-#include <android/log.h>
-#define SSRF_INFO(fmt, ...)	__android_log_print(ANDROID_LOG_INFO, "Subsurface", "INFO: " fmt "\n", ##__VA_ARGS__);
 #endif
 
 #endif // QTHELPER_H

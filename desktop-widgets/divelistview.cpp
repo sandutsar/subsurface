@@ -39,8 +39,8 @@ DiveListView::DiveListView(QWidget *parent) : QTreeView(parent),
 	setItemDelegateForColumn(DiveTripModelBase::RATING, new StarWidgetsDelegate(this));
 	MultiFilterSortModel *m = MultiFilterSortModel::instance();
 	setModel(m);
-	connect(m, &MultiFilterSortModel::selectionChanged, this, &DiveListView::diveSelectionChanged);
-	connect(m, &MultiFilterSortModel::currentDiveChanged, this, &DiveListView::currentDiveChanged);
+	connect(m, &MultiFilterSortModel::divesSelected, this, &DiveListView::divesSelectedSlot);
+	connect(m, &MultiFilterSortModel::tripSelected, this, &DiveListView::tripSelected);
 	connect(&diveListNotifier, &DiveListNotifier::settingsChanged, this, &DiveListView::settingsChanged);
 
 	setSortingEnabled(true);
@@ -49,8 +49,6 @@ DiveListView::DiveListView(QWidget *parent) : QTreeView(parent),
 	header()->setContextMenuPolicy(Qt::ActionsContextMenu);
 
 	resetModel();
-
-	connect(&diveListNotifier, &DiveListNotifier::tripChanged, this, &DiveListView::tripChanged);
 
 	header()->setStretchLastSection(true);
 	header()->setSortIndicatorShown(true);
@@ -69,15 +67,16 @@ DiveListView::DiveListView(QWidget *parent) : QTreeView(parent),
 		QString title = QString("%1").arg(model()->headerData(i, Qt::Horizontal).toString());
 		QString settingName = QString("showColumn%1").arg(i);
 		QAction *a = new QAction(title, header());
-		bool showHeaderFirstRun = !(i == DiveTripModelBase::MAXCNS ||
-					    i == DiveTripModelBase::GAS ||
-					    i == DiveTripModelBase::OTU ||
-					    i == DiveTripModelBase::TEMPERATURE ||
-					    i == DiveTripModelBase::TOTALWEIGHT ||
-					    i == DiveTripModelBase::SUIT ||
-					    i == DiveTripModelBase::CYLINDER ||
-					    i == DiveTripModelBase::SAC ||
-					    i == DiveTripModelBase::TAGS);
+		bool showHeaderFirstRun = i == DiveTripModelBase::NR ||
+					  i == DiveTripModelBase::DATE ||
+					  i == DiveTripModelBase::RATING ||
+					  i == DiveTripModelBase::DEPTH ||
+					  i == DiveTripModelBase::DURATION ||
+					  i == DiveTripModelBase::PHOTOS ||
+					  i == DiveTripModelBase::BUDDIES ||
+					  i == DiveTripModelBase::DIVEGUIDE ||
+					  i == DiveTripModelBase::COUNTRY ||
+					  i == DiveTripModelBase::LOCATION;
 		bool shown = s.value(settingName, showHeaderFirstRun).toBool();
 		a->setCheckable(true);
 		a->setChecked(shown);
@@ -226,7 +225,7 @@ void DiveListView::reset()
 }
 
 // If items were selected, inform the selection model
-void DiveListView::diveSelectionChanged(const QVector<QModelIndex> &indices)
+void DiveListView::divesSelectedSlot(const QVector<QModelIndex> &indices, QModelIndex currentDive, int currentDC)
 {
 	// This is the entry point for programmatical selection changes.
 	// Set a flag so that selection changes are not further processed,
@@ -248,8 +247,8 @@ void DiveListView::diveSelectionChanged(const QVector<QModelIndex> &indices)
 		if (std::find(affectedTrips.begin(), affectedTrips.end(), row) == affectedTrips.end())
 			affectedTrips.push_back(row);
 	}
-	// Disable animations when expanding trips. Otherwise, selection of
-	// a large number of dives becomes increadibly slow.
+	// Disable animations when expanding trips. With animations, selection of
+	// a large number of dives becomes unbearably slow.
 	bool oldAnimated = isAnimated();
 	setAnimated(false);
 	MultiFilterSortModel *m = MultiFilterSortModel::instance();
@@ -259,18 +258,22 @@ void DiveListView::diveSelectionChanged(const QVector<QModelIndex> &indices)
 	}
 	setAnimated(oldAnimated);
 
-	selectionChangeDone();
-	programmaticalSelectionChange = false;
-}
+	// This is truly sad, but taking the list of selected indices and turning them
+	// into dives turned out to be unreasonably slow. Therefore, let's access
+	// the core list directly.
+	std::vector<dive *> selected = getDiveSelection();
+	selectDiveSitesOnMap(selected);
+	struct dive *current = currentDive.data(DiveTripModelBase::DIVE_ROLE).value<struct dive *>();
+	emit divesSelected(selected, current, currentDC);
 
-void DiveListView::currentDiveChanged(QModelIndex index)
-{
+	programmaticalSelectionChange = false;
+
 	// Set the currently activated row.
 	// Note, we have to use the QItemSelectionModel::Current mode to avoid
 	// changing our selection (in contrast to Qt's documentation, which
 	// instructs to use QItemSelectionModel::NoUpdate, which results in
 	// funny side-effects).
-	selectionModel()->setCurrentIndex(index, QItemSelectionModel::Current);
+	selectionModel()->setCurrentIndex(currentDive, QItemSelectionModel::Current);
 }
 
 // If rows are added, check which of these rows is a trip and expand the first column
@@ -289,42 +292,35 @@ void DiveListView::rowsInserted(const QModelIndex &parent, int start, int end)
 	}
 }
 
-// This is a bit ugly: we hook directly into the tripChanged signal to
-// select the trip if it was edited. This feels like a layering violation:
-// Shouldn't the core-layer call us?
-void DiveListView::tripChanged(dive_trip *trip, TripField)
+void DiveListView::tripSelected(QModelIndex trip, QModelIndex currentDive)
 {
-	// First check if the trip is already selected (and only this trip, as only then is it displayed).
-	if (single_selected_trip() == trip)
-		return;
+	programmaticalSelectionChange = true;
 
-	unselectDives();
-	selectTrip(trip);
-	selectionChangeDone();
-}
-
-void DiveListView::selectTrip(dive_trip_t *trip)
-{
-	if (!trip)
-		return;
-
-	QAbstractItemModel *m = model();
-	QModelIndexList match = m->match(m->index(0, 0), DiveTripModelBase::TRIP_ROLE, QVariant::fromValue(trip), 2, Qt::MatchRecursive);
-	QItemSelectionModel::SelectionFlags flags;
-	if (!match.count())
-		return;
-	QModelIndex idx = match.first();
-	flags = QItemSelectionModel::Select;
-	flags |= QItemSelectionModel::Rows;
-	selectionModel()->select(idx, flags);
-	expand(idx);
-}
-
-void DiveListView::unselectDives()
-{
-	clear_selection();
 	// clear the Qt selection
 	selectionModel()->clearSelection();
+
+	if (trip.isValid()) {
+		QItemSelectionModel::SelectionFlags flags = QItemSelectionModel::Select | QItemSelectionModel::Rows;
+		selectionModel()->select(trip, flags);
+		selectTripItems(trip);
+	}
+
+	// Set the currently activated row.
+	// Note, we have to use the QItemSelectionModel::Current mode to avoid
+	// changing our selection (in contrast to Qt's documentation, which
+	// instructs to use QItemSelectionModel::NoUpdate, which results in
+	// funny side-effects).
+	selectionModel()->setCurrentIndex(currentDive, QItemSelectionModel::Current);
+
+	// This is truly sad, but taking the list of selected indices and turning them
+	// into dives turned out to be unreasonably slow. Therefore, let's access
+	// the core list directly.
+	std::vector<dive *> selection = getDiveSelection();
+	selectDiveSitesOnMap(selection);
+	struct dive *current = currentDive.data(DiveTripModelBase::DIVE_ROLE).value<struct dive *>();
+	emit divesSelected(selection, current, -1);
+
+	programmaticalSelectionChange = false;
 }
 
 bool DiveListView::eventFilter(QObject *, QEvent *event)
@@ -433,78 +429,9 @@ void DiveListView::currentChanged(const QModelIndex &current, const QModelIndex&
 	scrollTo(current);
 }
 
-void DiveListView::mouseReleaseEvent(QMouseEvent *event)
+void DiveListView::selectDiveSitesOnMap(const std::vector<dive *> &dives)
 {
-	// Oy vey. We hook into QTreeView's setSelection() to update the UI
-	// after selection changes. However, there is a case when this doesn't
-	// work: when narrowing the selection. If multiple dives are selected,
-	// and the user clicks on one of them, the selection is unchanged.
-	// Only on mouse-release the selection is changed, but then
-	// setSelection() is not called.
-	// Notably, this happens when the user selects a trip and the clicks
-	// on a dive in the same trip.
-	// To solve this, we hook into the mouseReleseEvent here and detect
-	// selection changes changes by comparing the selection before and after
-	// processing of the event.
-	// We really should find another way to solve this.
-	QModelIndexList selectionBefore = selectionModel()->selectedRows();
-	QTreeView::mouseReleaseEvent(event);
-	QModelIndexList selectionAfter = selectionModel()->selectedRows();
-	if (selectionBefore != selectionAfter)
-		selectionChangeDone();
-}
-
-void DiveListView::keyPressEvent(QKeyEvent *event)
-{
-	// Hook into key events that change the selection (i.e. cursor-up, cursor-down,
-	// page-up, page-down, home and end) and update selection if necessary.
-	// See comment in mouseReleaseEvent().
-	switch (event->key()) {
-		case Qt::Key_Up:
-		case Qt::Key_Down:
-		case Qt::Key_PageUp:
-		case Qt::Key_PageDown:
-		case Qt::Key_Home:
-		case Qt::Key_End:
-			break;
-		default:
-			return QTreeView::keyPressEvent(event);
-	}
-
-	QModelIndexList selectionBefore = selectionModel()->selectedRows();
-	QTreeView::keyPressEvent(event);
-	QModelIndexList selectionAfter = selectionModel()->selectedRows();
-	if (selectionBefore != selectionAfter)
-		selectionChangeDone();
-}
-
-void DiveListView::setSelection(const QRect &rect, QItemSelectionModel::SelectionFlags flags)
-{
-	// We hook into QTreeView's setSelection() to update the UI
-	// after selection changes. However, we must be careful:
-	// when the user clicks on an already selected dive, this is called
-	// with the QItemSelectionModel::NoUpdate flags. In this case, just
-	// route through. Moreover, we get setSelection() calls on every
-	// mouseMove event. To avoid excessive reloading of the UI check
-	// if the selection changed by comparing before and after processing
-	// the selection.
-	if (flags == QItemSelectionModel::NoUpdate)
-		return QTreeView::setSelection(rect, flags);
-	QModelIndexList selectionBefore = selectionModel()->selectedRows();
-	QTreeView::setSelection(rect, flags);
-	QModelIndexList selectionAfter = selectionModel()->selectedRows();
-	if (selectionBefore != selectionAfter)
-		selectionChangeDone();
-}
-
-void DiveListView::selectAll()
-{
-	QTreeView::selectAll();
-	selectionChangeDone();
-}
-
-void DiveListView::selectionChangeDone()
-{
+#ifdef MAP_SUPPORT
 	// When receiving the divesSelected signal the main window will
 	// instruct the map to update the flags. Thus, make sure that
 	// the selected maps are registered correctly.
@@ -512,22 +439,27 @@ void DiveListView::selectionChangeDone()
 	// the dive-site selection is controlled by the filter not
 	// by the selected dives.
 	if (!DiveFilter::instance()->diveSiteMode()) {
-		// This is truly sad, but taking the list of selected indices and turning them
-		// into dive sites turned out to be unreasonably slow. Therefore, let's access
-		// the core list directly. In my tests, this went down from 700 to 0 ms!
 		QVector<dive_site *> selectedSites;
-		selectedSites.reserve(amount_selected);
-		int i;
-		dive *d;
-		for_each_dive(i, d) {
-			if (d->selected && !d->hidden_by_filter && d->dive_site && !selectedSites.contains(d->dive_site))
+		selectedSites.reserve(dives.size());
+		for (dive *d: dives) {
+			if (!d->hidden_by_filter && d->dive_site && !selectedSites.contains(d->dive_site))
 				selectedSites.push_back(d->dive_site);
 		}
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 		MapWidget::instance()->setSelected(selectedSites);
-#endif
 	}
-	emit divesSelected();
+#endif
+}
+
+void DiveListView::selectTripItems(QModelIndex index)
+{
+	const QAbstractItemModel *model = index.model();
+	if (model->rowCount(index)) {
+		QItemSelection selection;
+		selection.select(model->index(0, 0, index), model->index(model->rowCount(index) - 1, 0, index));
+		selectionModel()->select(selection, QItemSelectionModel::Select | QItemSelectionModel::Rows);
+		if (!isExpanded(index))
+			expand(index);
+	}
 }
 
 void DiveListView::selectionChanged(const QItemSelection &selected, const QItemSelection &deselected)
@@ -540,6 +472,12 @@ void DiveListView::selectionChanged(const QItemSelection &selected, const QItemS
 		return;
 	}
 
+	// Avoid recursion: if later we decide to select all dives of a trip,
+	// this function is called again. Avoid this by setting the
+	// programmaticalSelectionChange flag. Note that the recursion never
+	// was a problem, but it just feels correct to avoid this recursion.
+	programmaticalSelectionChange = true;
+
 	// This is a manual selection change. This means that the core does not yet know
 	// of the new selection. Update the core-structures accordingly and select/deselect
 	// all dives of a trip if a trip is selected/deselected.
@@ -547,17 +485,18 @@ void DiveListView::selectionChanged(const QItemSelection &selected, const QItemS
 
 	QItemSelection newSelected = selected.size() ? selected : selectionModel()->selection();
 
+	std::vector<dive *> addToSelection, removeFromSelection;
 	Q_FOREACH (const QModelIndex &index, newDeselected.indexes()) {
 		if (index.column() != 0)
 			continue;
 		const QAbstractItemModel *model = index.model();
 		struct dive *dive = model->data(index, DiveTripModelBase::DIVE_ROLE).value<struct dive *>();
-		if (!dive) { // it's a trip!
-			dive_trip *trip = model->data(index, DiveTripModelBase::TRIP_ROLE).value<dive_trip *>();
+		if (dive) {
+			removeFromSelection.push_back(dive);
+		} else if (dive_trip *trip = model->data(index, DiveTripModelBase::TRIP_ROLE).value<dive_trip *>()) {
 			deselect_trip(trip);
-			deselect_dives_in_trip(trip);
-		} else {
-			deselect_dive(dive);
+			for (int i = 0; i < trip->dives.nr; ++i)
+				removeFromSelection.push_back(trip->dives.dives[i]);
 		}
 	}
 	Q_FOREACH (const QModelIndex &index, newSelected.indexes()) {
@@ -566,25 +505,37 @@ void DiveListView::selectionChanged(const QItemSelection &selected, const QItemS
 
 		const QAbstractItemModel *model = index.model();
 		struct dive *dive = model->data(index, DiveTripModelBase::DIVE_ROLE).value<struct dive *>();
-		if (!dive) { // it's a trip!
-			dive_trip *trip = model->data(index, DiveTripModelBase::TRIP_ROLE).value<dive_trip *>();
+		if (dive) {
+			addToSelection.push_back(dive);
+		} else if (dive_trip *trip = model->data(index, DiveTripModelBase::TRIP_ROLE).value<dive_trip *>()) {
 			select_trip(trip);
-			select_dives_in_trip(trip);
-			if (model->rowCount(index)) {
-				QItemSelection selection;
-				selection.select(model->index(0, 0, index), model->index(model->rowCount(index) - 1, 0, index));
-				selectionModel()->select(selection, QItemSelectionModel::Select | QItemSelectionModel::Rows);
-				selectionModel()->setCurrentIndex(index, QItemSelectionModel::Select | QItemSelectionModel::NoUpdate);
-				if (!isExpanded(index))
-					expand(index);
-			}
-		} else {
-			select_dive(dive);
+			for (int i = 0; i < trip->dives.nr; ++i)
+				addToSelection.push_back(trip->dives.dives[i]);
+			selectTripItems(index);
 		}
 	}
 
+	// Funny: It can happen that dives were added to the add and remove lists.
+	// For example, when switching from a trip to a single dive in the trip.
+	// To avoid ill-define situations, clean that up.
+	for (dive *d: addToSelection) {
+		auto it = std::find(removeFromSelection.begin(), removeFromSelection.end(), d);
+		if (it != removeFromSelection.end())
+			removeFromSelection.erase(it);
+	}
+
+	std::vector<dive *> selection = getDiveSelection();
+	updateSelection(selection, addToSelection, removeFromSelection);
+	dive *newCurrent = selection.empty() ? nullptr : selection.front();
+	setSelectionCore(selection, newCurrent);
+
 	// Display the new, processed, selection
 	QTreeView::selectionChanged(selectionModel()->selection(), newDeselected);
+
+	selectDiveSitesOnMap(selection);
+	emit divesSelected(selection, newCurrent, -1);
+
+	programmaticalSelectionChange = false;
 }
 
 enum asked_user {NOTYET, MERGE, DONTMERGE};
@@ -845,7 +796,10 @@ void DiveListView::contextMenuEvent(QContextMenuEvent *event)
 
 void DiveListView::shiftTimes()
 {
-	ShiftTimesDialog dialog(MainWindow::instance());
+	std::vector<dive *> dives = getDiveSelection();
+	if (dives.empty())
+		return;
+	ShiftTimesDialog dialog(std::move(dives), MainWindow::instance());
 	dialog.exec();
 }
 
@@ -869,7 +823,7 @@ void DiveListView::loadImages()
 	matchImagesToDives(fileNames);
 }
 
-void DiveListView::matchImagesToDives(QStringList fileNames)
+void DiveListView::matchImagesToDives(const QStringList &fileNames)
 {
 	ShiftImageTimesDialog shiftDialog(this, fileNames);
 	shiftDialog.setOffset(lastImageTimeOffset());
@@ -889,9 +843,9 @@ void DiveListView::matchImagesToDives(QStringList fileNames)
 
 		auto it = std::find_if(pics.begin(), pics.end(), [d](const Command::PictureListForAddition &l) { return l.d == d; });
 		if (it == pics.end())
-			pics.push_back(Command::PictureListForAddition { d, { pObj } });
+			pics.push_back(Command::PictureListForAddition { d, { std::move(pObj) } });
 		else
-			it->pics.push_back(pObj);
+			it->pics.push_back(std::move(pObj));
 	}
 
 	if (pics.empty())
@@ -905,46 +859,53 @@ void DiveListView::loadWebImages()
 	URLDialog urlDialog(this);
 	if (!urlDialog.exec())
 		return;
-	loadImageFromURL(QUrl::fromUserInput(urlDialog.url()));
+	loadImagesFromURLs(urlDialog.url());
 }
 
-void DiveListView::loadImageFromURL(QUrl url)
+void DiveListView::loadImagesFromURLs(const QString &urls)
 {
-	if (url.isValid()) {
-		QEventLoop loop;
-		QNetworkRequest request(url);
-		QNetworkReply *reply = manager.get(request);
-		while (reply->isRunning()) {
-			loop.processEvents();
-			sleep(1);
-		}
-		QByteArray imageData = reply->readAll();
+	QStringList validUrls;
+	QStringList urlList = urls.split('\n');
+	QStringList::ConstIterator userUrl;
+	for (userUrl = urlList.constBegin(); userUrl != urlList.constEnd(); ++userUrl) {
+		QUrl url = QUrl::fromUserInput(*userUrl);
+		if (url.isValid()) {
+			QEventLoop loop;
+			QNetworkRequest request(url);
+			QNetworkReply *reply = manager.get(request);
+			while (reply->isRunning()) {
+				loop.processEvents();
+				sleep(1);
+			}
+			QByteArray imageData = reply->readAll();
 
-		QImage image = QImage();
-		image.loadFromData(imageData);
-		if (image.isNull()) {
-			// If this is not an image, maybe it's an html file and Miika can provide some xslr magic to extract images.
-			// In this case we would call the function recursively on the list of image source urls;
-			report_error(qPrintable(tr("%1 does not appear to be an image").arg(url.toString())));
-			return;
-		}
+			QImage image = QImage();
+			image.loadFromData(imageData);
+			if (image.isNull()) {
+				// If this is not an image, maybe it's an html file and Miika can provide some xslr magic to extract images.
+				// In this case we would call the function recursively on the list of image source urls;
+				report_error("%s", qPrintable(tr("%1 does not appear to be an image").arg(url.toString())));
+				return;
+			}
 
-		QCryptographicHash hash(QCryptographicHash::Sha1);
-		hash.addData(url.toString().toUtf8());
-		QString path = QStandardPaths::standardLocations(QStandardPaths::CacheLocation).first();
-		QDir dir(path);
-		if (!dir.exists())
-			dir.mkpath(path);
-		QFile imageFile(path.append("/").append(hash.result().toHex()));
-		if (imageFile.open(QIODevice::WriteOnly)) {
-			QDataStream stream(&imageFile);
-			stream.writeRawData(imageData.data(), imageData.length());
-			imageFile.waitForBytesWritten(-1);
-			imageFile.close();
-			learnPictureFilename(url.toString(), imageFile.fileName());
-			matchImagesToDives(QStringList(url.toString()));
+			QCryptographicHash hash(QCryptographicHash::Sha1);
+			hash.addData(url.toString().toUtf8());
+			QString path = QStandardPaths::standardLocations(QStandardPaths::CacheLocation).first();
+			QDir dir(path);
+			if (!dir.exists())
+				dir.mkpath(path);
+			QFile imageFile(path.append("/").append(hash.result().toHex()));
+			if (imageFile.open(QIODevice::WriteOnly)) {
+				QDataStream stream(&imageFile);
+				stream.writeRawData(imageData.data(), imageData.length());
+				imageFile.waitForBytesWritten(-1);
+				imageFile.close();
+				learnPictureFilename(url.toString(), imageFile.fileName());
+				validUrls << url.toString();
+			}
 		}
 	}
+	matchImagesToDives(validUrls);
 }
 
 QString DiveListView::lastUsedImageDir()
@@ -977,11 +938,12 @@ int DiveListView::lastImageTimeOffset()
 	return offset;
 }
 
-void DiveListView::updateLastImageTimeOffset(const int offset)
+void DiveListView::updateLastImageTimeOffset(timestamp_t offset)
 {
 	QSettings s;
 	s.beginGroup("MainWindow");
-	s.setValue("LastImageTimeOffset", offset);
+	// Can't create a QVariant from int64_t, for whatever reason.
+	s.setValue("LastImageTimeOffset", static_cast<long long>(offset));
 }
 
 void DiveListView::mouseDoubleClickEvent(QMouseEvent*)

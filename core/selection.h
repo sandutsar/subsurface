@@ -7,6 +7,7 @@
 struct dive;
 
 extern int amount_selected;
+extern struct dive *current_dive;
 
 /*** C and C++ functions ***/
 
@@ -14,8 +15,6 @@ extern int amount_selected;
 extern "C" {
 #endif
 
-extern void select_dive(struct dive *dive);
-extern void deselect_dive(struct dive *dive);
 extern struct dive *first_selected_dive(void);
 extern struct dive *last_selected_dive(void);
 extern bool consecutive_selected(void);
@@ -38,14 +37,32 @@ extern void dump_selection(void);
 
 #ifdef __cplusplus
 #include <vector>
+#include <QVector>
 
 // Reset the selection to the dives of the "selection" vector and send the appropriate signals.
-// Set the current dive to "currentDive". "currentDive" must be an element of "selection" (or
-// null if "seletion" is empty).
-void setSelection(const std::vector<dive *> &selection, dive *currentDive);
+// Set the current dive to "currentDive" and the current dive computer to "currentDc".
+// "currentDive" must be an element of "selection" (or null if "seletion" is empty).
+// If "currentDc" is negative, an attempt will be made to keep the current computer number.
+// Returns the list of selected dives
+QVector<dive *> setSelectionCore(const std::vector<dive *> &selection, dive *currentDive);
 
-// Get currently selectd dives
+// As above, but sends a signal to inform the frontend of the changed selection.
+// Returns true if the current dive changed.
+void setSelection(const std::vector<dive *> &selection, dive *currentDive, int currentDc);
+
+// Set selection, but try to keep the current dive. If current dive is not in selection,
+// find the nearest current dive in the selection
+// Returns true if the current dive changed.
+// Does not send a signal.
+bool setSelectionKeepCurrent(const std::vector<dive *> &selection);
+
+// Select all dive in a trip and sends a trip-selected signal
+void setTripSelection(dive_trip *trip, dive *currentDive);
+
+// Get currently selected dives
 std::vector<dive *> getDiveSelection();
+bool diveInSelection(const std::vector<dive *> &selection, const dive *d);
+void updateSelection(std::vector<dive *> &selection, const std::vector<dive *> &add, const std::vector<dive *> &remove);
 
 #endif // __cplusplus
 

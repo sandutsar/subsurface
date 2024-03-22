@@ -28,6 +28,7 @@
 #include "core/errorhelper.h"
 #include "core/file.h"
 #include "core/divefilter.h"
+#include "core/divelog.h"
 #include "core/filterconstraint.h"
 #include "core/qthelper.h"
 #include "core/qt-gui.h"
@@ -58,7 +59,6 @@
 #include <QtAndroid>
 #include "core/serial_usb_android.h"
 std::vector<android_usb_serial_device_descriptor> androidSerialDevices;
-
 #endif
 
 QMLManager *QMLManager::m_instance = NULL;
@@ -207,13 +207,11 @@ QMLManager::QMLManager() :
 	m_initialized(false),
 	m_pluggedInDeviceName(""),
 	m_showNonDiveComputers(false),
-	undoAction(Command::undoAction(this)),
 	m_oldStatus(qPrefCloudStorage::CS_UNKNOWN)
 {
 	m_instance = this;
 	m_lastDevicePixelRatio = qApp->devicePixelRatio();
 	timer.start();
-
 	// make upload signals available in QML
 	// Remark: signal - signal connect
 	connect(uploadDiveLogsDE::instance(), &uploadDiveLogsDE::uploadFinish,
@@ -282,6 +280,7 @@ QMLManager::QMLManager() :
 	git_libgit2_version(&git_maj, &git_min, &git_rev);
 	appendTextToLog(QStringLiteral("built with libgit2 %1.%2.%3").arg(git_maj).arg(git_min).arg(git_rev));
 	appendTextToLog(QStringLiteral("Running on %1").arg(QSysInfo::prettyProductName()));
+	appendTextToLog(QStringLiteral("Locale Languages offered %1, picked %2").arg(QLocale().uiLanguages().join(", ")).arg(prefs.locale.lang_locale));
 #if defined(Q_OS_ANDROID)
 	extern QString getAndroidHWInfo();
 	appendTextToLog(getAndroidHWInfo());
@@ -334,6 +333,7 @@ QMLManager::QMLManager() :
 
 	// setup Command infrastructure
 	Command::init();
+	undoAction = Command::undoAction(this);
 }
 
 void QMLManager::applicationStateChanged(Qt::ApplicationState state)
@@ -379,7 +379,7 @@ void QMLManager::openLocalThenRemote(QString url)
 	 * we try to open this), parse_file (which is called by openAndMaybeSync) will ALWAYS connect
 	 * to the remote and populate the cache.
 	 * Otherwise parse_file will respect the git_local_only flag and only update if that isn't set */
-	int error = parse_file(encodedFilename.constData(), &dive_table, &trip_table, &dive_site_table, &device_table, &filter_preset_table);
+	int error = parse_file(encodedFilename.constData(), &divelog);
 	if (error) {
 		/* there can be 2 reasons for this:
 		 * 1) we have cloud credentials, but there is no local repo (yet).
@@ -394,26 +394,29 @@ void QMLManager::openLocalThenRemote(QString url)
 		if (credStatus != qPrefCloudStorage::CS_NOCLOUD) {
 			appendTextToLog(QStringLiteral("loading dives from cache failed %1").arg(error));
 			setNotificationText(tr("Opening local data file failed"));
-			if (credStatus != qPrefCloudStorage::CS_INCORRECT_USER_PASSWD)
+			if (credStatus != qPrefCloudStorage::CS_INCORRECT_USER_PASSWD) {
 				qPrefCloudStorage::set_cloud_verification_status(qPrefCloudStorage::CS_NEED_TO_VERIFY);
+				emit passwordStateChanged();
+			}
 		}
 	} else {
 		// if we can load from the cache, we know that we have a valid cloud account
 		// and we know that there was at least one successful sync with the cloud when
 		// that local cache was created - so there is a common ancestor
 		setLoadFromCloud(true);
-		if (qPrefCloudStorage::cloud_verification_status() == qPrefCloudStorage::CS_UNKNOWN)
+		if (qPrefCloudStorage::cloud_verification_status() == qPrefCloudStorage::CS_UNKNOWN) {
 			qPrefCloudStorage::set_cloud_verification_status(qPrefCloudStorage::CS_VERIFIED);
+			emit passwordStateChanged();
+		}
 		qPrefUnits::set_unit_system(git_prefs.unit_system);
 		qPrefTechnicalDetails::set_tankbar(git_prefs.tankbar);
-		qPrefTechnicalDetails::set_dcceiling(git_prefs.dcceiling);
 		qPrefTechnicalDetails::set_show_ccr_setpoint(git_prefs.show_ccr_setpoint);
 		qPrefTechnicalDetails::set_show_ccr_sensors(git_prefs.show_ccr_sensors);
 		qPrefPartialPressureGas::set_po2(git_prefs.pp_graphs.po2);
 		// the following steps can take a long time, so provide updates
-		setNotificationText(tr("Processing %1 dives").arg(dive_table.nr));
+		setNotificationText(tr("Processing %1 dives").arg(divelog.dives->nr));
 		process_loaded_dives();
-		setNotificationText(tr("%1 dives loaded from local dive data file").arg(dive_table.nr));
+		setNotificationText(tr("%1 dives loaded from local dive data file").arg(divelog.dives->nr));
 	}
 	if (qPrefCloudStorage::cloud_verification_status() == qPrefCloudStorage::CS_NEED_TO_VERIFY) {
 		appendTextToLog(QStringLiteral("have cloud credentials, but still needs PIN"));
@@ -474,13 +477,9 @@ static QString nocloud_localstorage()
 
 void QMLManager::mergeLocalRepo()
 {
-	struct dive_table table = empty_dive_table;
-	struct trip_table trips = empty_trip_table;
-	struct dive_site_table sites = empty_dive_site_table;
-	struct device_table devices;
-	struct filter_preset_table filter_presets;
-	parse_file(qPrintable(nocloud_localstorage()), &table, &trips, &sites, &devices, &filter_presets);
-	add_imported_dives(&table, &trips, &sites, &devices, IMPORT_MERGE_ALL_TRIPS);
+	struct divelog log;
+	parse_file(qPrintable(nocloud_localstorage()), &log);
+	add_imported_dives(&log, IMPORT_MERGE_ALL_TRIPS);
 	mark_divelist_changed(true);
 }
 
@@ -499,15 +498,24 @@ bool QMLManager::createSupportEmail()
 	if (activity.isValid()) {
 		QAndroidJniObject applogfilepath = QAndroidJniObject::fromString(appLogFileName);
 		QAndroidJniObject libdcfilepath = QAndroidJniObject::fromString(logfile_name);
-		bool success = activity.callMethod<jboolean>("shareFiles",
+		bool success = activity.callMethod<jboolean>("supportEmail",
 					"(Ljava/lang/String;Ljava/lang/String;)Z", // two string arguments, return bool
 					applogfilepath.object<jstring>(), libdcfilepath.object<jstring>());
-		qDebug() << __FUNCTION__ << "shareFiles" << (success ? "succeeded" : "failed");
+		qDebug() << __FUNCTION__ << "supportEmail" << (success ? "succeeded" : "failed");
 		if (success)
 			return true;
 	}
 	qDebug() << __FUNCTION__ << "failed to share the logFiles via intent, use the fall-back mail body method";
+#elif defined(Q_OS_IOS)
+	// call into objC++ code to share on iOS
+	QString libdcLogFileName(logfile_name);
+	iosshare.supportEmail(appLogFileName, libdcLogFileName);
+	// Unfortunately I haven't been able to figure out how to wait until the mail was sent
+	// so that this could tell us whether this was successful or not
+	// We always assume it worked and return to the caller.
+	return true;
 #endif
+	// fallback code that tries to copy the logs into the message body and uses the Qt send email method
 	QString mailToLink = "mailto:in-app-support@subsurface-divelog.org?subject=Subsurface-mobile support request";
 	mailToLink += "&body=";
 	mailToLink += messageBody;
@@ -569,9 +577,10 @@ void QMLManager::finishSetup()
 		rememberOldStatus();
 		set_filename(qPrintable(nocloud_localstorage()));
 		qPrefCloudStorage::set_cloud_verification_status(qPrefCloudStorage::CS_NOCLOUD);
+		emit passwordStateChanged();
 		saveCloudCredentials(qPrefCloudStorage::cloud_storage_email(), qPrefCloudStorage::cloud_storage_password(), qPrefCloudStorage::cloud_storage_pin());
 		appendTextToLog(tr("working in no-cloud mode"));
-		int error = parse_file(existing_filename, &dive_table, &trip_table, &dive_site_table, &device_table, &filter_preset_table);
+		int error = parse_file(existing_filename, &divelog);
 		if (error) {
 			// we got an error loading the local file
 			setNotificationText(tr("Error parsing local storage, giving up"));
@@ -580,10 +589,11 @@ void QMLManager::finishSetup()
 			// successfully opened the local file, now add thigs to the dive list
 			consumeFinishedLoad();
 			updateHaveLocalChanges(true);
-			appendTextToLog(QString("working in no-cloud mode, finished loading %1 dives from %2").arg(dive_table.nr).arg(existing_filename));
+			appendTextToLog(QString("working in no-cloud mode, finished loading %1 dives from %2").arg(divelog.dives->nr).arg(existing_filename));
 		}
 	} else {
 		qPrefCloudStorage::set_cloud_verification_status(qPrefCloudStorage::CS_UNKNOWN);
+		emit passwordStateChanged();
 		appendTextToLog(tr("no cloud credentials"));
 		setStartPageText(RED_FONT + tr("Please enter valid cloud credentials.") + END_FONT);
 	}
@@ -648,6 +658,7 @@ void QMLManager::saveCloudCredentials(const QString &newEmail, const QString &ne
 		!cloudCredentialsChanged) {
 		// just go back to the dive list
 		qPrefCloudStorage::set_cloud_verification_status(m_oldStatus);
+		emit passwordStateChanged();
 	}
 
 	if (!noCloud && !verifyCredentials(email, newPassword, pin)) {
@@ -657,7 +668,7 @@ void QMLManager::saveCloudCredentials(const QString &newEmail, const QString &ne
 	qPrefCloudStorage::set_cloud_storage_email(email);
 	qPrefCloudStorage::set_cloud_storage_password(newPassword);
 
-	if (m_oldStatus == qPrefCloudStorage::CS_NOCLOUD && cloudCredentialsChanged && dive_table.nr) {
+	if (m_oldStatus == qPrefCloudStorage::CS_NOCLOUD && cloudCredentialsChanged && divelog.dives->nr) {
 		// we came from NOCLOUD and are connecting to a cloud account;
 		// since we already have dives in the table, let's remember that so we can keep them
 		noCloudToCloud = true;
@@ -726,6 +737,43 @@ bool QMLManager::verifyCredentials(QString email, QString password, QString pin)
 	return true;
 }
 
+void QMLManager::deleteAccount()
+{
+	QString email(prefs.cloud_storage_email);
+	QString passwd(prefs.cloud_storage_password);
+	if (email.isEmpty() || passwd.isEmpty())
+		return;
+
+	setStartPageText(tr("Deleting cloud account..."));
+	appendTextToLog(QStringLiteral("user requested that we delete cloud account for email %1").arg(email));
+	CloudStorageAuthenticate *csa = new CloudStorageAuthenticate(this);
+	csa->deleteAccount(email, passwd);
+	// let's wait here for the signal to avoid too many more nested functions
+	QTimer myTimer;
+	myTimer.setSingleShot(true);
+	QEventLoop loop;
+	connect(csa, &CloudStorageAuthenticate::finishedDelete, &loop, &QEventLoop::quit);
+	connect(&myTimer, &QTimer::timeout, &loop, &QEventLoop::quit);
+	myTimer.start(prefs.cloud_timeout * 3 * 1000); // give it extra time
+	loop.exec();
+	if (!myTimer.isActive()) {
+		// got no response from the server
+		setStartPageText(RED_FONT + tr("No response from cloud server to delete account") + END_FONT);
+		appendTextToLog(QStringLiteral("no response from cloud server to delete account"));
+		return;
+	}
+	myTimer.stop();
+	appendTextToLog(QStringLiteral("deleted the account"));
+	qPrefCloudStorage::set_cloud_storage_email("");
+	qPrefCloudStorage::set_cloud_storage_email_encoded("");
+	qPrefCloudStorage::set_cloud_storage_password("");
+	qPrefCloudStorage::set_cloud_verification_status(qPrefCloudStorage::CS_NOCLOUD);
+	emit passwordStateChanged();
+	set_filename(qPrintable(nocloud_localstorage()));
+	setStartPageText(tr("Cloud storage account deleted."));
+	return;
+}
+
 void QMLManager::loadDivesWithValidCredentials()
 {
 	QString url;
@@ -735,10 +783,10 @@ void QMLManager::loadDivesWithValidCredentials()
 		return;
 	}
 	QByteArray fileNamePrt = QFile::encodeName(url);
-	git_repository *git;
-	const char *branch;
+	struct git_info info;
 	int error;
-	if (check_git_sha(fileNamePrt.data(), &git, &branch) == 0) {
+
+	if (remote_repo_uptodate(fileNamePrt.data(), &info)) {
 		appendTextToLog("Cloud sync shows local cache was current");
 	} else {
 		appendTextToLog("Cloud sync brought newer data, reloading the dive list");
@@ -750,12 +798,12 @@ void QMLManager::loadDivesWithValidCredentials()
 		} else {
 			appendTextToLog("Switching from no cloud mode; keep in memory dive data");
 		}
-		if (git != dummy_git_repository) {
-			appendTextToLog(QString("have repository and branch %1").arg(branch));
-			error = git_load_dives(git, branch, &dive_table, &trip_table, &dive_site_table, &device_table, &filter_preset_table);
+		if (info.repo) {
+			appendTextToLog(QString("have repository and branch %1").arg(info.branch));
+			error = git_load_dives(&info, &divelog);
 		} else {
 			appendTextToLog(QString("didn't receive valid git repo, try again"));
-			error = parse_file(fileNamePrt.data(), &dive_table, &trip_table, &dive_site_table, &device_table, &filter_preset_table);
+			error = parse_file(fileNamePrt.data(), &divelog);
 		}
 		setDiveListProcessing(false);
 		if (!error) {
@@ -770,6 +818,8 @@ void QMLManager::loadDivesWithValidCredentials()
 		}
 		consumeFinishedLoad();
 	}
+	cleanup_git_info(&info);
+
 	setLoadFromCloud(true);
 
 	// if we came from local storage mode, let's merge the local data into the local cache
@@ -777,7 +827,7 @@ void QMLManager::loadDivesWithValidCredentials()
 	if (noCloudToCloud) {
 		git_storage_update_progress(qPrintable(tr("Loading dives from local storage ('no cloud' mode)")));
 		mergeLocalRepo();
-		appendTextToLog(QStringLiteral("%1 dives loaded after importing nocloud local storage").arg(dive_table.nr));
+		appendTextToLog(QStringLiteral("%1 dives loaded after importing nocloud local storage").arg(divelog.dives->nr));
 		noCloudToCloud = false;
 		mark_divelist_changed(true);
 		emit syncStateChanged();
@@ -822,6 +872,7 @@ void QMLManager::revertToNoCloudIfNeeded()
 		qPrefCloudStorage::set_cloud_storage_password("");
 		rememberOldStatus();
 		qPrefCloudStorage::set_cloud_verification_status(qPrefCloudStorage::CS_NOCLOUD);
+		emit passwordStateChanged();
 		set_filename(qPrintable(nocloud_localstorage()));
 		setStartPageText(RED_FONT + tr("Failed to connect to cloud server, reverting to no cloud status") + END_FONT);
 	}
@@ -836,13 +887,12 @@ void QMLManager::consumeFinishedLoad()
 		git_prefs.units = SI_units;
 	prefs.units = git_prefs.units;
 	prefs.tankbar = git_prefs.tankbar;
-	prefs.dcceiling = git_prefs.dcceiling;
 	prefs.show_ccr_setpoint = git_prefs.show_ccr_setpoint;
 	prefs.show_ccr_sensors = git_prefs.show_ccr_sensors;
 	prefs.pp_graphs.po2 = git_prefs.pp_graphs.po2;
 	process_loaded_dives();
-	appendTextToLog(QStringLiteral("%1 dives loaded").arg(dive_table.nr));
-	if (dive_table.nr == 0)
+	appendTextToLog(QStringLiteral("%1 dives loaded").arg(divelog.dives->nr));
+	if (divelog.dives->nr == 0)
 		setStartPageText(tr("Cloud storage open successfully. No dives in dive list."));
 }
 
@@ -855,7 +905,7 @@ void QMLManager::refreshDiveList()
 // The following structure describes such a change caused by a dive edit.
 // Hopefully, we can remove this in due course by using finer-grained undo-commands.
 struct DiveSiteChange {
-	Command::OwningDiveSitePtr createdDs; // not-null if we created a dive site.
+	OwningDiveSitePtr createdDs; // not-null if we created a dive site.
 
 	dive_site *editDs = nullptr; // not-null if we are supposed to edit an existing dive site.
 	location_t location = zero_location; // new value of the location if we edit an existing dive site.
@@ -966,6 +1016,35 @@ bool QMLManager::checkDate(struct dive *d, QString date)
 				if (newDate.isValid())
 					goto parsed;
 			}
+			// if everything else failed - maybe the user is entering dives where they
+			// don't recall the time? So let's try date only patterns...
+			QRegularExpression usDateOnly("\\d+/\\d+/\\d+");
+			if (date.contains(usDateOnly)) {
+				newDate = QDateTime::fromString(date, "M/d/yy");
+				if (newDate.isValid())
+					goto parsed;
+				newDate = QDateTime::fromString(date, "M/d/yyyy");
+				if (newDate.isValid())
+					goto parsed;
+			}
+			QRegularExpression leDateOnly("\\d+\\.\\d+\\.\\d+");
+			if (date.contains(usDateOnly)) {
+				newDate = QDateTime::fromString(date, "d.M.yy");
+				if (newDate.isValid())
+					goto parsed;
+				newDate = QDateTime::fromString(date, "d.M.yyyy");
+				if (newDate.isValid())
+					goto parsed;
+			}
+			QRegularExpression isoDateOnly("\\d+-\\d+-\\d+");
+			if (date.contains(usDateOnly)) {
+				newDate = QDateTime::fromString(date, "yy-M-d");
+				if (newDate.isValid())
+					goto parsed;
+				newDate = QDateTime::fromString(date, "yyyy-M-d");
+				if (newDate.isValid())
+					goto parsed;
+			}
 		}
 parsed:
 		if (newDate.isValid()) {
@@ -988,7 +1067,7 @@ bool QMLManager::checkLocation(DiveSiteChange &res, struct dive *d, QString loca
 	bool changed = false;
 	QString oldLocation = get_dive_location(d);
 	if (oldLocation != location) {
-		ds = get_dive_site_by_name(qPrintable(location), &dive_site_table);
+		ds = get_dive_site_by_name(qPrintable(location), divelog.sites);
 		if (!ds && !location.isEmpty()) {
 			res.createdDs.reset(alloc_dive_site_with_name(qPrintable(location)));
 			res.changed = true;
@@ -1053,7 +1132,7 @@ bool QMLManager::checkDuration(struct dive *d, QString duration)
 			m = m6.captured(1).toInt();
 		}
 		d->dc.duration.seconds = d->duration.seconds = h * 3600 + m * 60 + s;
-		if (same_string(d->dc.model, "manually added dive"))
+		if (is_manually_added_dc(&d->dc))
 			free_samples(&d->dc);
 		else
 			appendTextToLog("Cannot change the duration on a dive that wasn't manually added");
@@ -1071,7 +1150,7 @@ bool QMLManager::checkDepth(dive *d, QString depth)
 		// the depth <= 500m
 		if (0 <= depthValue && depthValue <= 500000) {
 			d->maxdepth.mm = depthValue;
-			if (same_string(d->dc.model, "manually added dive")) {
+			if (is_manually_added_dc(&d->dc)) {
 				d->dc.maxdepth.mm = d->maxdepth.mm;
 				free_samples(&d->dc);
 			}
@@ -1110,7 +1189,7 @@ void QMLManager::commitChanges(QString diveId, QString number, QString date, QSt
 				      QStringLiteral("state   :'%1'\n").arg(state);
 	}
 
-	Command::OwningDivePtr d_ptr(alloc_dive()); // Automatically delete dive if we exit early!
+	OwningDivePtr d_ptr(alloc_dive()); // Automatically delete dive if we exit early!
 	dive *d = d_ptr.get();
 	copy_dive(orig, d);
 
@@ -1277,7 +1356,7 @@ void QMLManager::commitChanges(QString diveId, QString number, QString date, QSt
 	if (diveChanged) {
 		if (d->maxdepth.mm == d->dc.maxdepth.mm &&
 		    d->maxdepth.mm > 0 &&
-		    same_string(d->dc.model, "manually added dive") &&
+		    is_manually_added_dc(&d->dc) &&
 		    d->dc.samples == 0) {
 			// so we have depth > 0, a manually added dive and no samples
 			// let's create an actual profile so the desktop version can work it
@@ -1391,13 +1470,10 @@ void QMLManager::openNoCloudRepo()
 	 * is obviously empty when just created.
 	 */
 	QString filename = nocloud_localstorage();
-	const char *branch;
-	struct git_repository *git;
+	struct git_info info;
 
 	appendTextToLog(QString("User asked not to connect to cloud, using %1 as repo.").arg(filename));
-	git = is_git_repository(qPrintable(filename), &branch, NULL, false);
-
-	if (git == dummy_git_repository) {
+	if (is_git_repository(qPrintable(filename), &info) && !open_git_repository(&info)) {
 		// repo doesn't exist, create it and write the empty dive list to it
 		git_create_local_repo(qPrintable(filename));
 		save_dives(qPrintable(filename));
@@ -1645,14 +1721,14 @@ int QMLManager::addDive()
 	d.dc.duration.seconds = 40 * 60;
 	d.dc.maxdepth.mm = M_OR_FT(15, 45);
 	d.dc.meandepth.mm = M_OR_FT(13, 39); // this creates a resonable looking safety stop
-	d.dc.model = strdup("manually added dive"); // don't translate! this is stored in the XML file
+	make_manually_added_dc(&d.dc);
 	fake_dc(&d.dc);
 	fixup_dive(&d);
 
 	// addDive takes over the dive and clears out the structure passed in
 	// we do NOT save the modified data at this stage because of the UI flow here... this will
 	// be saved once the user finishes editing the newly added dive
-	Command::addDive(&d, autogroup, true);
+	Command::addDive(&d, divelog.autogroup, true);
 
 	if (verbose)
 		appendTextToLog(QString("Adding new dive with id '%1'").arg(diveId));
@@ -1729,7 +1805,7 @@ QString QMLManager::getGpsFromSiteName(const QString &siteName)
 {
 	struct dive_site *ds;
 
-	ds = get_dive_site_by_name(qPrintable(siteName), &dive_site_table);
+	ds = get_dive_site_by_name(qPrintable(siteName), divelog.sites);
 	if (!ds)
 		return QString();
 	return printGPSCoords(&ds->location);
@@ -2140,9 +2216,6 @@ void QMLManager::exportToFile(export_types type, QString dir, bool anonymize)
 				save_dive_sites_logic(qPrintable(fileName + ".xml"), sites.data(), (int)sites.size(), anonymize);
 				break;
 			}
-		case EX_UDDF:
-			exportUsingStyleSheet(fileName + ".uddf", true, 0, "uddf-export.xslt", anonymize);
-			break;
 		default:
 			qDebug() << "export to unknown type " << type << " using " << dir << " remove names " << anonymize;
 			break;
@@ -2166,6 +2239,63 @@ void QMLManager::exportToWEB(export_types type, QString userId, QString password
 	}
 }
 
+void QMLManager::shareViaEmail(export_types type, bool anonymize)
+{
+#if defined(Q_OS_ANDROID) || defined(Q_OS_IOS)
+	QString fileName = appLogFileName;
+#else
+	QString fileName = system_default_directory();
+#endif
+	QString body;
+	switch (type) {
+	case EX_DIVES_XML:
+		fileName.replace("subsurface.log", "subsurface.ssrf");
+		if (save_dives_logic(qPrintable(fileName), false, anonymize) == 0) {
+			// ok, we have a file, let's send it
+			body = "Subsurface dive log data";
+		} else {
+			appendTextToLog("failure to save dive log, aborting attempt to send via email");
+		}
+		break;
+	case EX_DIVE_SITES_XML:
+		fileName.replace("subsurface.log", "subsurface_divesites.xml");
+		{ // need a block so the compiler doesn't complain about creating the sites variable here
+			std::vector<const dive_site *> sites = getDiveSitesToExport(false);
+			if (save_dive_sites_logic(qPrintable(fileName), sites.data(), (int)sites.size(), anonymize) == 0) {
+				// ok, we have a file, let's send it
+				body = "Subsurface dive site data";
+			} else {
+				appendTextToLog("failure to save dive site data, aborting attempt to send via email");
+			}
+		}
+		break;
+	default:
+		qDebug() << "cannot export type " << type << " via email";
+		return;
+	}
+#if defined(Q_OS_ANDROID)
+	// let's use our nifty Java shareViaEmail function
+	QAndroidJniObject activity = QtAndroid::androidActivity();
+	if (activity.isValid()) {
+		QAndroidJniObject attachmentPath = QAndroidJniObject::fromString(fileName);
+		QAndroidJniObject subject = QAndroidJniObject::fromString("Subsurface export");
+		QAndroidJniObject bodyString = QAndroidJniObject::fromString(body);
+		QAndroidJniObject emptyString = QAndroidJniObject::fromString("");
+		bool success = activity.callMethod<jboolean>("shareViaEmail",
+					"(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z", // five string arguments, return bool
+					subject.object<jstring>(), emptyString.object<jstring>(), bodyString.object<jstring>(),
+							     attachmentPath.object<jstring>(), emptyString.object<jstring>());
+		qDebug() << __FUNCTION__ << "shareViaEmail" << (success ? "succeeded" : "failed");
+	}
+#elif defined(Q_OS_IOS)
+	// call into objC++ code to share on iOS
+	QString subject("Subsurface export");
+	QString emptyString("");
+	iosshare.shareViaEmail(subject, emptyString, body, fileName, emptyString);
+#else
+	appendTextToLog("on a mobile platform this would send" + fileName + "via email with body" + body);
+#endif
+}
 void QMLManager::uploadFinishSlot(bool success, const QString &text, const QByteArray &html)
 {
 	emit uploadFinish(success, text);
@@ -2222,22 +2352,18 @@ void QMLManager::setDiveListProcessing(bool value)
 
 void QMLManager::importCacheRepo(QString repo)
 {
-	struct dive_table table = empty_dive_table;
-	struct trip_table trips = empty_trip_table;
-	struct dive_site_table sites = empty_dive_site_table;
-	struct device_table devices;
-	struct filter_preset_table filter_presets;
+	struct divelog log;
 	QString repoPath = QString("%1/cloudstorage/%2").arg(system_default_directory()).arg(repo);
 	appendTextToLog(QString("importing %1").arg(repoPath));
-	parse_file(qPrintable(repoPath), &table, &trips, &sites, &devices, &filter_presets);
-	add_imported_dives(&table, &trips, &sites, &devices, IMPORT_MERGE_ALL_TRIPS);
+	parse_file(qPrintable(repoPath), &log);
+	add_imported_dives(&log, IMPORT_MERGE_ALL_TRIPS);
 	changesNeedSaving();
 }
 
 QStringList QMLManager::cloudCacheList() const
 {
 	QDir localCacheDir(QString("%1/cloudstorage/").arg(system_default_directory()));
-	QStringList dirs = localCacheDir.entryList(QDir::NoDotAndDotDot);
+	QStringList dirs = localCacheDir.entryList();
 	QStringList result;
 	foreach(QString dir, dirs) {
 		QString originsDir = QString("%1/cloudstorage/%2/.git/refs/remotes/origin/").arg(system_default_directory()).arg(dir);
@@ -2245,9 +2371,8 @@ QStringList QMLManager::cloudCacheList() const
 		if (dir == "localrepo") {
 			result << QString("localrepo[master]");
 		} else {
-			foreach(QString branch, remote.entryList().filter(QRegularExpression("...+"))) {
+			foreach(QString branch, remote.entryList().filter(QRegularExpression("...+")))
 				result << QString("%1[%2]").arg(dir).arg(branch);
-			}
 		}
 	}
 	return result;
@@ -2267,4 +2392,13 @@ QString QMLManager::getSyncState() const
 	if (localChanges)
 		return tr("(changes synced locally)");
 	return tr("(synced with cloud)");
+}
+
+// show the state of the cloud login
+QString QMLManager::getPasswordState() const
+{
+	auto credStatus = qPrefCloudStorage::cloud_verification_status();
+	if (credStatus == qPrefCloudStorage::CS_INCORRECT_USER_PASSWD)
+		return tr("(incorrect cloud email or password)");
+	return QString();
 }

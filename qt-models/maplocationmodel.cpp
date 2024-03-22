@@ -3,12 +3,34 @@
 #include "divelocationmodel.h"
 #include "core/divesite.h"
 #include "core/divefilter.h"
+#include "core/divelog.h"
+#include "core/settings/qPrefDisplay.h"
 #if !defined(SUBSURFACE_MOBILE) && !defined(SUBSURFACE_DOWNLOADER)
 #include "qt-models/filtermodels.h"
 #include "desktop-widgets/mapwidget.h"
 #endif
 
 #define MIN_DISTANCE_BETWEEN_DIVE_SITES_M 50.0
+
+// MKW If "Map Short Names" preference is set, only return the last component
+// of the full dive site name.
+// Example:
+// Japan/Izu Peninsula/Atami/Chinsen-Aft
+//    Short name: Chinsen-Aft
+static QString siteMapDisplayName(const char *sitename)
+{
+	const char Separator = '/';
+	QString fullname(sitename);
+
+	if (!qPrefDisplay::map_short_names() )
+		return fullname;
+
+	QString name = fullname.section(Separator, -1).trimmed();
+	if (name.isEmpty())
+		name = std::move(fullname);
+	return name;
+}
+
 
 MapLocation::MapLocation(struct dive_site *dsIn, QGeoCoordinate coordIn, QString nameIn, bool selectedIn) :
     divesite(dsIn), coordinate(coordIn), name(nameIn), selected(selectedIn)
@@ -138,8 +160,8 @@ void MapLocationModel::reload(QObject *map)
 	if (diveSiteMode)
 		m_selectedDs = DiveFilter::instance()->filteredDiveSites();
 #endif
-	for (int i = 0; i < dive_site_table.nr; ++i) {
-		struct dive_site *ds = dive_site_table.dive_sites[i];
+	for (int i = 0; i < divelog.sites->nr; ++i) {
+		struct dive_site *ds = divelog.sites->dive_sites[i];
 		QGeoCoordinate dsCoord;
 
 		// Don't show dive sites of hidden dives, unless we're in dive site edit mode.
@@ -159,7 +181,7 @@ void MapLocationModel::reload(QObject *map)
 		}
 		if (!diveSiteMode && hasSelectedDive(ds) && !m_selectedDs.contains(ds))
 			m_selectedDs.append(ds);
-		QString name(ds->name);
+		QString name = siteMapDisplayName(ds->name);
 		if (!diveSiteMode) {
 			// don't add dive locations with the same name, unless they are
 			// at least MIN_DISTANCE_BETWEEN_DIVE_SITES_M apart
@@ -199,7 +221,7 @@ MapLocation *MapLocationModel::getMapLocation(const struct dive_site *ds)
 		if (ds == location->divesite)
 			return location;
 	}
-	return NULL;
+	return nullptr;
 }
 
 void MapLocationModel::diveSiteChanged(struct dive_site *ds, int field)
@@ -223,7 +245,7 @@ void MapLocationModel::diveSiteChanged(struct dive_site *ds, int field)
 		}
 		break;
 	case LocationInformationModel::NAME:
-		m_mapLocations[row]->name = ds->name;
+		m_mapLocations[row]->name = siteMapDisplayName(ds->name);
 		break;
 	default:
 		break;

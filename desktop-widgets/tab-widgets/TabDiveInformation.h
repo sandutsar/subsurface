@@ -12,9 +12,9 @@ namespace Ui {
 class TabDiveInformation : public TabBase {
 	Q_OBJECT
 public:
-	TabDiveInformation(QWidget *parent = 0);
+	TabDiveInformation(MainTab *parent);
 	~TabDiveInformation();
-	void updateData() override;
+	void updateData(const std::vector<dive *> &selection, dive *currentDive, int currentDC) override;
 	void clear() override;
 	void updateUi(QString titleColor) override;
 private slots:
@@ -33,7 +33,6 @@ private slots:
 	void on_waterTypeCombo_activated(int index);
 private:
 	Ui::TabDiveInformation *ui;
-	bool manualDive;
 	void updateProfile();
 	int updateSalinityComboIndex(int salinity);
 	void checkDcSalinityOverWritten();
@@ -41,7 +40,7 @@ private:
 	int pressTypeIndex;
 	void updateWaterTypeWidget();
 	void updateTextBox(int event);
-	void updateMode(struct dive *d);
+	void updateMode();
 	void divesEdited(int);
 	void closeWarning();
 	void showCurrentWidget(bool show, int position);

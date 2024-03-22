@@ -33,8 +33,6 @@ typedef struct dive_site_table {
 
 static const dive_site_table_t empty_dive_site_table = { 0, 0, (struct dive_site **)0 };
 
-extern struct dive_site_table dive_site_table;
-
 static inline struct dive_site *get_dive_site(int nr, struct dive_site_table *ds_table)
 {
 	if (nr >= ds_table->nr || nr < 0)
@@ -64,7 +62,7 @@ struct dive_site *create_dive_site(const char *name, struct dive_site_table *ds_
 struct dive_site *create_dive_site_with_gps(const char *name, const location_t *, struct dive_site_table *ds_table);
 struct dive_site *get_dive_site_by_name(const char *name, struct dive_site_table *ds_table);
 struct dive_site *get_dive_site_by_gps(const location_t *, struct dive_site_table *ds_table);
-struct dive_site *get_dive_site_by_gps_and_name(char *name, const location_t *, struct dive_site_table *ds_table);
+struct dive_site *get_dive_site_by_gps_and_name(const char *name, const location_t *, struct dive_site_table *ds_table);
 struct dive_site *get_dive_site_by_gps_proximity(const location_t *, int distance, struct dive_site_table *ds_table);
 struct dive_site *get_same_dive_site(const struct dive_site *);
 bool dive_site_is_empty(struct dive_site *ds);

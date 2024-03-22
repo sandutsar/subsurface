@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "event.h"
+#include "eventtype.h"
 #include "subsurface-string.h"
 
 #include <string.h>
@@ -79,6 +80,8 @@ struct event *create_event(unsigned int time, int type, int flags, int value, co
 		break;
 	}
 
+	remember_event_type(ev);
+
 	return ev;
 }
 
@@ -100,37 +103,16 @@ bool same_event(const struct event *a, const struct event *b)
 	return !strcmp(a->name, b->name);
 }
 
-/* collect all event names and whether we display them */
-struct ev_select *ev_namelist = NULL;
-int evn_used = 0;
-static int evn_allocated = 0;
-
-void clear_events(void)
+extern enum event_severity get_event_severity(const struct event *ev)
 {
-	for (int i = 0; i < evn_used; i++)
-		free(ev_namelist[i].ev_name);
-	evn_used = 0;
-}
-
-void remember_event(const char *eventname)
-{
-	int i = 0, len;
-
-	if (!eventname || (len = strlen(eventname)) == 0)
-		return;
-	while (i < evn_used) {
-		if (!strncmp(eventname, ev_namelist[i].ev_name, len))
-			return;
-		i++;
+	switch (ev->flags & SAMPLE_FLAGS_SEVERITY_MASK) {
+	case SAMPLE_FLAGS_SEVERITY_INFO:
+		return EVENT_SEVERITY_INFO;
+	case SAMPLE_FLAGS_SEVERITY_WARN:
+		return EVENT_SEVERITY_WARN;
+	case SAMPLE_FLAGS_SEVERITY_ALARM:
+		return EVENT_SEVERITY_ALARM;
+	default:
+		return EVENT_SEVERITY_NONE;
 	}
-	if (evn_used == evn_allocated) {
-		evn_allocated += 10;
-		ev_namelist = realloc(ev_namelist, evn_allocated * sizeof(struct ev_select));
-		if (!ev_namelist)
-			/* we are screwed, but let's just bail out */
-			return;
-	}
-	ev_namelist[evn_used].ev_name = strdup(eventname);
-	ev_namelist[evn_used].plot_ev = true;
-	evn_used++;
 }

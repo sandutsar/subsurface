@@ -8,14 +8,15 @@
 #include "qt-models/diveplannermodel.h"
 #include "core/gettextfromc.h"
 #include "core/sample.h"
+#include "core/selection.h"
 #include "core/subsurface-qt/divelistnotifier.h"
 #include "core/subsurface-string.h"
 #include <string>
 
-CylindersModel::CylindersModel(bool planner, bool hideUnused, QObject *parent) : CleanerTableModel(parent),
+CylindersModel::CylindersModel(bool planner, QObject *parent) : CleanerTableModel(parent),
 	d(nullptr),
+	dcNr(-1),
 	inPlanner(planner),
-	hideUnused(hideUnused),
 	numRows(0),
 	tempRow(-1),
 	tempCyl(empty_cylinder)
@@ -133,13 +134,14 @@ static QVariant percent_string(fraction_t fraction)
 	return QString("%L1%").arg(permille / 10.0, 0, 'f', 1);
 }
 
-// Calculate the number of displayed cylinders: If hideUnused
-// is set, we don't show unused cylinders at the end of the list.
+// Calculate the number of displayed cylinders: If we are in planner
+// or prefs.include_unused_tanks is set we show unused cylinders
+// at the end of the list.
 int CylindersModel::calcNumRows() const
 {
 	if (!d)
 		return 0;
-	if (!hideUnused || prefs.display_unused_tanks)
+	if (inPlanner || prefs.include_unused_tanks)
 		return d->cylinders.nr;
 	return first_hidden_cylinder(d);
 }
@@ -241,22 +243,17 @@ QVariant CylindersModel::data(const QModelIndex &index, int role) const
 			return static_cast<int>(cyl->type.size.mliter);
 		case SENSORS: {
 			std::vector<int16_t> sensors;
-			const struct divecomputer *currentdc = get_dive_dc(current_dive, dc_number);
+			const struct divecomputer *currentdc = get_dive_dc(d, dcNr);
 			for (int i = 0; i < currentdc->samples; ++i) {
 				auto &sample = currentdc->sample[i];
-				for (auto s = 0; s < MAX_SENSORS; ++s) {
+				for (int s = 0; s < MAX_SENSORS; ++s) {
 					if (sample.pressure[s].mbar) {
 						if (sample.sensor[s] == index.row())
-							return tr("Sensor attached, can't move another sensor here.");
-						else if (std::find(sensors.begin(), sensors.end(), sample.sensor[s]) == sensors.end())
-							sensors.push_back(sample.sensor[s]);
+							return QString::number(sample.sensor[s]);
 					}
 				}
 			}
-			QStringList sensorStrings;
-			for (auto s : sensors)
-				sensorStrings << QString::number(s);
-			return tr("Select one of these cylinders: ") + sensorStrings.join(",");
+			return QString();
 		}
 		}
 		break;
@@ -477,18 +474,10 @@ bool CylindersModel::setData(const QModelIndex &index, const QVariant &value, in
 		type = Command::EditCylinderType::TYPE;
 		break;
 	case SENSORS: {
-		std::vector<int> sensors;
-		for (auto &sensor : vString.split(",")) {
-			bool ok = false;
-			int s = sensor.toInt(&ok);
-			if (ok && s < MAX_SENSORS)
-				sensors.push_back(s);
-		}
-
 		bool ok = false;
 		int s = vString.toInt(&ok);
 		if (ok) {
-			Command::editSensors(index.row(), s);
+			Command::editSensors(index.row(), s, dcNr);
 			// We don't use the edit cylinder command and editing sensors is not relevant for planner
 			return true;
 		}
@@ -534,10 +523,11 @@ void CylindersModel::clear()
 {
 	beginResetModel();
 	d = nullptr;
+	dcNr = -1;
 	endResetModel();
 }
 
-void CylindersModel::updateDive(dive *dIn)
+void CylindersModel::updateDive(dive *dIn, int dcNrIn)
 {
 #ifdef DEBUG_CYL
 	if (d)
@@ -545,27 +535,15 @@ void CylindersModel::updateDive(dive *dIn)
 #endif
 	beginResetModel();
 	d = dIn;
+	dcNr = dcNrIn;
 	numRows = calcNumRows();
 	endResetModel();
 }
 
 Qt::ItemFlags CylindersModel::flags(const QModelIndex &index) const
 {
-	if (index.column() == REMOVE || index.column() == USE)
+	if (index.column() == REMOVE)
 		return Qt::ItemIsEnabled;
-	if (index.column() == SENSORS) {
-		const struct divecomputer *currentdc = get_dive_dc(current_dive, dc_number);
-		for (int i = 0; i < currentdc->samples; ++i) {
-			auto &sample = currentdc->sample[i];
-			for (auto s = 0; s < MAX_SENSORS; ++s) {
-				if (sample.pressure[s].mbar) {
-					if (sample.sensor[s] == index.row())
-						// Sensor attached, not editable.
-						return QAbstractItemModel::flags(index);
-				}
-			}
-		}
-	}
 	return QAbstractItemModel::flags(index) | Qt::ItemIsEditable;
 }
 
@@ -576,15 +554,6 @@ void CylindersModel::remove(QModelIndex index)
 {
 	if (!d)
 		return;
-	if (index.column() == USE) {
-		cylinder_t *cyl = cylinderAt(index);
-		if (cyl->cylinder_use == OC_GAS)
-			cyl->cylinder_use = NOT_USED;
-		else if (cyl->cylinder_use == NOT_USED)
-			cyl->cylinder_use = OC_GAS;
-		dataChanged(index, index);
-		return;
-	}
 
 	if (index.column() != REMOVE)
 		return;

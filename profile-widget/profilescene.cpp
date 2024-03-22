@@ -12,6 +12,7 @@
 #include "core/pref.h"
 #include "core/profile.h"
 #include "core/qthelper.h"	// for decoMode()
+#include "core/subsurface-float.h"
 #include "core/subsurface-string.h"
 #include "core/settings/qPrefDisplay.h"
 #include "qt-models/diveplannermodel.h"
@@ -89,6 +90,7 @@ ProfileScene::ProfileScene(double dpr, bool printMode, bool isGrayscale) :
 	dpr(dpr),
 	printMode(printMode),
 	isGrayscale(isGrayscale),
+	empty(true),
 	maxtime(-1),
 	maxdepth(-1),
 	profileYAxis(new DiveCartesianAxis(DiveCartesianAxis::Position::Left, true, 3, 0, TIME_GRID, Qt::red, true, true,
@@ -164,6 +166,7 @@ ProfileScene::ProfileScene(double dpr, bool printMode, bool isGrayscale) :
 	addTissueItems<0,16>(dpr);
 
 	percentageItem->setZValue(1.0);
+	profileYAxis->setGridIsMultipleOfThree( qPrefDisplay::three_m_based_grid() );
 
 	// Add items to scene
 	addItem(diveComputerText);
@@ -198,6 +201,7 @@ void ProfileScene::clear()
 	qDeleteAll(eventItems);
 	eventItems.clear();
 	free_plot_info_data(&plotInfo);
+	empty = true;
 }
 
 static bool ppGraphsEnabled(const struct divecomputer *dc, bool simplified)
@@ -214,6 +218,11 @@ void ProfileScene::updateVisibility(bool diveHasHeartBeat, bool simplified)
 		return;
 	bool ppGraphs = ppGraphsEnabled(currentdc, simplified);
 
+	diveCeiling->setVisible(prefs.calcceiling);
+	for (DiveCalculatedTissue *tissue: allTissues)
+		tissue->setVisible(prefs.calcalltissues && prefs.calcceiling);
+	reportedCeiling->setVisible(prefs.dcceiling);
+
 	if (simplified) {
 		pn2GasItem->setVisible(false);
 		po2GasItem->setVisible(ppGraphs);
@@ -227,6 +236,8 @@ void ProfileScene::updateVisibility(bool diveHasHeartBeat, bool simplified)
 		ccrsensor2GasItem->setVisible(ppGraphs && prefs.show_ccr_sensors && (currentdc->no_o2sensors > 1));
 		ccrsensor3GasItem->setVisible(ppGraphs && prefs.show_ccr_sensors && (currentdc->no_o2sensors > 1));
 		ocpo2GasItem->setVisible((currentdc->divemode == PSCR) && prefs.show_scr_ocpo2);
+		// No point to show the gradient factor if we're not showing the calculated ceiling that is derived from it
+		decoModelParameters->setVisible(prefs.calcceiling);
 	} else {
 		pn2GasItem->setVisible(prefs.pp_graphs.pn2);
 		po2GasItem->setVisible(prefs.pp_graphs.po2);
@@ -242,15 +253,11 @@ void ProfileScene::updateVisibility(bool diveHasHeartBeat, bool simplified)
 
 		heartBeatItem->setVisible(prefs.hrgraph && diveHasHeartBeat);
 
-		diveCeiling->setVisible(prefs.calcceiling);
 		decoModelParameters->setVisible(prefs.decoinfo);
 
-		for (DiveCalculatedTissue *tissue: allTissues)
-			tissue->setVisible(prefs.calcalltissues && prefs.calcceiling);
 		percentageItem->setVisible(prefs.percentagegraph);
 
 		meanDepthItem->setVisible(prefs.show_average_depth);
-		reportedCeiling->setVisible(prefs.dcceiling);
 		tankItem->setVisible(prefs.tankbar);
 		temperatureItem->setVisible(true);
 	}
@@ -303,6 +310,8 @@ void ProfileScene::updateAxes(bool diveHasHeartBeat, bool simplified)
 
 	if (width <= 10.0 * dpr)
 		return clear();
+
+	profileYAxis->setGridIsMultipleOfThree( qPrefDisplay::three_m_based_grid() );
 
 	// Place the fixed dive computer text at the bottom
 	double bottomBorder = sceneRect().height() - diveComputerText->height() - 2.0 * dpr * diveComputerTextBorder;
@@ -425,6 +434,11 @@ void ProfileScene::plotDive(const struct dive *dIn, int dcIn, DivePlannerPointsM
 		return;
 	}
 
+	// If we come from the empty state, the plot info has to be recalculated.
+	if (empty)
+		keepPlotInfo = false;
+	empty = false;
+
 	int animSpeed = instant || printMode ? 0 : qPrefDisplay::animation_speed();
 
 	// A non-null planner_ds signals to create_plot_info_new that the dive is currently planned.
@@ -461,9 +475,8 @@ void ProfileScene::plotDive(const struct dive *dIn, int dcIn, DivePlannerPointsM
 	 */
 	int newMaxDepth = get_maxdepth(&plotInfo);
 	if (!calcMax) {
-		if (maxdepth < newMaxDepth) {
+		if (maxdepth < newMaxDepth)
 			maxdepth = newMaxDepth;
-		}
 	} else {
 		maxdepth = newMaxDepth;
 	}
@@ -488,11 +501,9 @@ void ProfileScene::plotDive(const struct dive *dIn, int dcIn, DivePlannerPointsM
 	percentageAxis->updateTicks(animSpeed);
 	animatedAxes.push_back(percentageAxis);
 
-	if (calcMax) {
-		double relStart = (1.0 - 1.0/zoom) * zoomedPosition;
-		double relEnd = relStart + 1.0/zoom;
-		timeAxis->setBounds(round(relStart * maxtime), round(relEnd * maxtime));
-	}
+	double relStart = (1.0 - 1.0/zoom) * zoomedPosition;
+	double relEnd = relStart + 1.0/zoom;
+	timeAxis->setBounds(round(relStart * maxtime), round(relEnd * maxtime));
 
 	// Find first and last plotInfo entry
 	int firstSecond = lrint(timeAxis->minimum());
@@ -514,7 +525,7 @@ void ProfileScene::plotDive(const struct dive *dIn, int dcIn, DivePlannerPointsM
 	animatedAxes.push_back(timeAxis);
 	cylinderPressureAxis->setBounds(plotInfo.minpressure, plotInfo.maxpressure);
 
-	tankItem->setData(d, firstSecond, lastSecond);
+	tankItem->setData(d, currentdc, firstSecond, lastSecond);
 
 	if (ppGraphsEnabled(currentdc, simplified)) {
 		double max = prefs.pp_graphs.phe ? max_gas(plotInfo, &gas_pressures::he) : -1;
@@ -574,11 +585,9 @@ void ProfileScene::plotDive(const struct dive *dIn, int dcIn, DivePlannerPointsM
 		dcText = tr("Manually added dive");
 	else if (dcText.isEmpty())
 		dcText = tr("Unknown dive computer");
-#ifndef SUBSURFACE_MOBILE
-	int nr;
-	if ((nr = number_of_computers(d)) > 1)
+	int nr = number_of_computers(d);
+	if (nr > 1)
 		dcText += tr(" (#%1 of %2)").arg(dc + 1).arg(nr);
-#endif
 	diveComputerText->set(dcText, getColor(TIME_TEXT, isGrayscale));
 
 	// Reset animation.
@@ -623,4 +632,20 @@ void ProfileScene::draw(QPainter *painter, const QRect &pos,
 		}
 	}
 	painter->drawImage(pos, image);
+}
+
+// Calculate the new zoom position when the mouse is dragged by delta.
+// This is annoyingly complex, because the zoom position is given as
+// a real between 0 and 1.
+double ProfileScene::calcZoomPosition(double zoom, double originalPos, double delta)
+{
+	double factor = 1.0 - 1.0/zoom;
+	if (nearly_0(factor))
+		return 0.0;
+	double relStart = factor * originalPos;
+	double start = relStart * maxtime;
+	double newStart = start + timeAxis->deltaToValue(delta);
+	double newRelStart = newStart / maxtime;
+	double newPos = newRelStart / factor;
+	return std::clamp(newPos, 0.0, 1.0);
 }

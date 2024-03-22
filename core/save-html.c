@@ -6,6 +6,7 @@
 
 #include "save-html.h"
 #include "dive.h"
+#include "divelog.h"
 #include "qthelper.h"
 #include "gettext.h"
 #include "divesite.h"
@@ -370,7 +371,7 @@ static void write_one_dive(struct membuffer *b, struct dive *dive, const char *p
 	put_HTML_watertemp(b, dive, "\"water\":\"", "\"");
 	put_string(b, "	},");
 	write_attribute(b, "buddy", dive->buddy, ", ");
-	write_attribute(b, "divemaster", dive->diveguide, ", ");
+	write_attribute(b, "diveguide", dive->diveguide, ", ");
 	write_attribute(b, "suit", dive->suit, ", ");
 	put_HTML_tags(b, dive, "\"tags\":", ",");
 	if (!list_only) {
@@ -452,8 +453,8 @@ static void write_trips(struct membuffer *b, const char *photos_dir, bool select
 	char sep_ = ' ';
 	char *sep = &sep_;
 
-	for (i = 0; i < trip_table.nr; ++i)
-		trip_table.trips[i]->saved = 0;
+	for (i = 0; i < divelog.trips->nr; ++i)
+		divelog.trips->trips[i]->saved = 0;
 
 	for_each_dive (i, dive) {
 		trip = dive->divetrip;

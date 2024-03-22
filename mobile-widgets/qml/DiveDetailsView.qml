@@ -210,7 +210,6 @@ Item {
 				color: subsurfaceTheme.textColor
 			}
 		}
-
 	}
 	GridLayout {
 		id: bottomLayout
@@ -254,7 +253,7 @@ Item {
 						// before realizing that this is actually a pinch/zoom. So let's reset this
 						// just in case
 						qmlProfile.opacity = 1.0
-						if (manager.verboseEnabebled)
+						if (manager.verboseEnabled)
 							manager.appendTextToLog("pinch started w/ previousScale " + qmlProfile.lastScale)
 					}
 					onPinchUpdated: {
@@ -362,7 +361,44 @@ Item {
 			horizontalAlignment: Text.AlignHCenter
 			text: qsTr("No profile to show")
 		}
-
+		// under the profile
+		// -----------------
+		Row {
+			TemplateButton {
+				id: prevDC
+				visible: qmlProfile.numDC > 1
+				text: qsTr("prev.DC")
+				font.pointSize: subsurfaceTheme.smallPointSize
+				onClicked: {
+					qmlProfile.prevDC()
+				}
+			}
+			TemplateLabel {
+				text: " "
+				width: Kirigami.Units.largeSpacing
+				visible: qmlProfile.numDC > 1
+			}
+			TemplateButton {
+				id: nextDC
+				visible: qmlProfile.numDC > 1
+				text: qsTr("next DC")
+				font.pointSize: subsurfaceTheme.smallPointSize
+				onClicked: {
+					qmlProfile.nextDC()
+				}
+			}
+		}
+		// two empty entries
+		TemplateLabel {
+			text: " "
+			width: Kirigami.Units.largeSpacing
+			visible: qmlProfile.numDC > 1
+		}
+		TemplateLabel {
+			text: " "
+			width: Kirigami.Units.largeSpacing
+			visible: qmlProfile.numDC > 1
+		}
 		// first row
 		//-----------
 		TemplateLabelSmall {

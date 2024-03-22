@@ -19,26 +19,22 @@
 #include "cleanertablemodel.h"
 #include "treemodel.h"
 
+struct dive;
+
 class GasSelectionModel : public QStringListModel {
 	Q_OBJECT
 public:
-	static GasSelectionModel *instance();
 	Qt::ItemFlags flags(const QModelIndex &index) const;
 	QVariant data(const QModelIndex &index, int role) const override;
-public
-slots:
-	void repopulate();
+	void repopulate(const dive *d);
 };
 
 class DiveTypeSelectionModel : public QStringListModel {
 	Q_OBJECT
 public:
-	static DiveTypeSelectionModel *instance();
+	DiveTypeSelectionModel();
 	Qt::ItemFlags flags(const QModelIndex &index) const;
 	QVariant data(const QModelIndex &index, int role) const override;
-public
-slots:
-	void repopulate();
 };
 
 class LanguageModel : public QAbstractListModel {

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/deco.h"
+#include "core/divemode.h"
 #include "core/planner.h"
 #include "qt-models/cylindermodel.h"
 
@@ -51,6 +52,8 @@ public:
 	int ascratelast6mDisplay() const;
 	int descrateDisplay() const;
 	int getSurfacePressure() const;
+	int gfLow() const;
+	int gfHigh() const;
 
 	/**
 	 * @return the row number.
@@ -60,7 +63,7 @@ public:
 	struct diveplan &getDiveplan();
 	struct deco_state final_deco_state;
 
-	void loadFromDive(dive *d);
+	void loadFromDive(dive *d, int dcNr);
 	void addStop(int millimeters, int seconds);
 public
 slots:
@@ -132,6 +135,7 @@ private:
 	void computeVariationsFreeDeco(struct diveplan *diveplan, struct deco_state *ds);
 	int analyzeVariations(struct decostop *min, struct decostop *mid, struct decostop *max, const char *unit);
 	struct dive *d;
+	int dcNr;
 	CylindersModel cylinders;
 	Mode mode;
 	QVector<divedatapoint> divepoints;

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "TabDiveEquipment.h"
 #include "maintab.h"
-#include "desktop-widgets/simplewidgets.h" // For isGnome3Session()
 #include "desktop-widgets/modeldelegates.h"
 #include "core/dive.h"
 #include "core/selection.h"
@@ -29,8 +28,8 @@ static bool hiddenByDefault(int i)
 	return false;
 }
 
-TabDiveEquipment::TabDiveEquipment(QWidget *parent) : TabBase(parent),
-	cylindersModel(new CylindersModel(false, true, this)),
+TabDiveEquipment::TabDiveEquipment(MainTab *parent) : TabBase(parent),
+	cylindersModel(new CylindersModel(false, this)),
 	weightModel(new WeightModel(this))
 {
 	QCompleter *suitCompleter;
@@ -51,17 +50,10 @@ TabDiveEquipment::TabDiveEquipment(QWidget *parent) : TabBase(parent),
 	connect(cylindersModel, &CylindersModel::divesEdited, this, &TabDiveEquipment::divesEdited);
 	connect(weightModel, &WeightModel::divesEdited, this, &TabDiveEquipment::divesEdited);
 
-	// Current display of things on Gnome3 looks like shit, so
-	// let's fix that.
-	if (isGnome3Session()) {
-		QPalette p;
-		p.setColor(QPalette::Window, QColor(Qt::white));
-		ui.scrollArea->viewport()->setPalette(p);
-	}
-
-	ui.cylinders->view()->setItemDelegateForColumn(CylindersModel::TYPE, new TankInfoDelegate(this));
-	ui.cylinders->view()->setItemDelegateForColumn(CylindersModel::USE, new TankUseDelegate(this));
-	ui.weights->view()->setItemDelegateForColumn(WeightModel::TYPE, new WSInfoDelegate(this));
+	ui.cylinders->view()->setItemDelegateForColumn(CylindersModel::TYPE, &tankInfoDelegate);
+	ui.cylinders->view()->setItemDelegateForColumn(CylindersModel::USE, &tankUseDelegate);
+	ui.cylinders->view()->setItemDelegateForColumn(CylindersModel::SENSORS, &sensorDelegate);
+	ui.weights->view()->setItemDelegateForColumn(WeightModel::TYPE, &wsInfoDelegate);
 	ui.cylinders->view()->setColumnHidden(CylindersModel::DEPTH, true);
 	ui.cylinders->view()->setColumnHidden(CylindersModel::WORKINGPRESS_INT, true);
 	ui.cylinders->view()->setColumnHidden(CylindersModel::SIZE_INT, true);
@@ -122,12 +114,11 @@ TabDiveEquipment::~TabDiveEquipment()
 // Refresh the corresponding UI field.
 void TabDiveEquipment::divesChanged(const QVector<dive *> &dives, DiveField field)
 {
-	// If the current dive is not in list of changed dives, do nothing
-	if (!current_dive || !dives.contains(current_dive))
+	if (!parent.includesCurrentDive(dives))
 		return;
 
 	if (field.suit)
-		ui.suit->setText(QString(current_dive->suit));
+		ui.suit->setText(QString(parent.currentDive->suit));
 }
 
 void TabDiveEquipment::toggleTriggeredColumn()
@@ -145,18 +136,17 @@ void TabDiveEquipment::toggleTriggeredColumn()
 	}
 }
 
-void TabDiveEquipment::updateData()
+void TabDiveEquipment::updateData(const std::vector<dive *> &, dive *currentDive, int currentDC)
 {
-	cylindersModel->updateDive(current_dive);
-	weightModel->updateDive(current_dive);
+	divecomputer *dc = get_dive_dc(currentDive, currentDC);
 
-	bool is_ccr = current_dive && get_dive_dc(current_dive, dc_number)->divemode == CCR;
-	if (is_ccr)
-		ui.cylinders->view()->showColumn(CylindersModel::USE);
-	else
-		ui.cylinders->view()->hideColumn(CylindersModel::USE);
-	if (current_dive && current_dive->suit)
-		ui.suit->setText(QString(current_dive->suit));
+	cylindersModel->updateDive(currentDive, currentDC);
+	weightModel->updateDive(currentDive);
+	sensorDelegate.setCurrentDC(dc);
+	tankUseDelegate.setCurrentDC(dc);
+
+	if (currentDive && currentDive->suit)
+		ui.suit->setText(QString(currentDive->suit));
 	else
 		ui.suit->clear();
 }
@@ -222,7 +212,7 @@ void TabDiveEquipment::divesEdited(int i)
 
 void TabDiveEquipment::on_suit_editingFinished()
 {
-	if (!current_dive)
+	if (!parent.currentDive)
 		return;
 	divesEdited(Command::editSuit(ui.suit->text(), false));
 }

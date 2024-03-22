@@ -19,7 +19,7 @@ static bool isReady = false;
 #define CHECK_IS_READY_RETURN_VOID() \
 	if (!isReady) return
 
-MapWidget *MapWidget::m_instance = NULL;
+MapWidget *MapWidget::m_instance = nullptr;
 
 MapWidget::MapWidget(QWidget *parent) : QQuickWidget(parent)
 {
@@ -29,6 +29,7 @@ MapWidget::MapWidget(QWidget *parent) : QQuickWidget(parent)
 	connect(this, &QQuickWidget::statusChanged, this, &MapWidget::doneLoading);
 	connect(&diveListNotifier, &DiveListNotifier::divesChanged, this, &MapWidget::divesChanged);
 	connect(&diveListNotifier, &DiveListNotifier::dataReset, this, &MapWidget::reload);
+	connect(&diveListNotifier, &DiveListNotifier::settingsChanged, this, &MapWidget::reload);
 	setSource(urlMapWidget);
 }
 
@@ -82,12 +83,6 @@ void MapWidget::setSelected(const QVector<dive_site *> &divesites)
 {
 	CHECK_IS_READY_RETURN_VOID();
 	m_mapHelper->setSelected(divesites);
-}
-
-void MapWidget::selectionChanged()
-{
-	CHECK_IS_READY_RETURN_VOID();
-	m_mapHelper->selectionChanged();
 	m_mapHelper->centerOnSelectedDiveSite();
 }
 
@@ -102,7 +97,7 @@ void MapWidget::selectedDivesChanged(const QList<int> &list)
 		if (dive *d = get_dive(idx))
 			selection.push_back(d);
 	}
-	setSelection(selection, current_dive);
+	setSelection(selection, current_dive, -1);
 }
 
 void MapWidget::coordinatesChanged(struct dive_site *ds, const location_t &location)
@@ -119,7 +114,7 @@ void MapWidget::divesChanged(const QVector<dive *> &, DiveField field)
 // Sadly, for reasons out of our control, we can't use a normal singleton for the
 // map widget: In a standard singleton, the object is freed after main() exits.
 // However, if there is an animation running (map zooming), the thread is
-// terminated, when the QApplication object is destroyed, which is before main()
+// terminated when the QApplication object is destroyed, which is before main()
 // exits. The thread has a QQmlAnimationTimer that is freed. However, the map widget
 // then tries to free the object itself, leading to a crash. Clearly, a bug in
 // the QML MapWidget / QtQuick ecosystem.
@@ -127,12 +122,12 @@ void MapWidget::divesChanged(const QVector<dive *> &, DiveField field)
 // the reference is cleared. Sad.
 MapWidget::~MapWidget()
 {
-	m_instance = NULL;
+	m_instance = nullptr;
 }
 
 MapWidget *MapWidget::instance()
 {
-	if (m_instance == NULL)
+	if (m_instance == nullptr)
 		m_instance = new MapWidget();
 	return m_instance;
 }

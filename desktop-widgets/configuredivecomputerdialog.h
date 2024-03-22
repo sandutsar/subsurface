@@ -72,7 +72,7 @@ slots:
 	void resetSettings();
 	void configMessage(QString msg);
 	void configError(QString err);
-	void on_cancel_clicked();
+	void on_close_clicked();
 	void on_saveSettingsPushButton_clicked();
 	void deviceDetailsReceived(DeviceDetails *newDeviceDetails);
 	void reloadValues();
@@ -115,10 +115,6 @@ private:
 	void reloadValuesSuuntoVyper();
 	void reloadValuesOSTC4();
 
-	QString selected_vendor;
-	QString selected_product;
-	bool fw_upgrade_possible;
-
 #ifdef BT_SUPPORT
 	BtDeviceSelectionDialog *btDeviceSelectionDialog;
 #endif
@@ -127,7 +123,7 @@ private:
 class OstcFirmwareCheck : public QObject {
 	Q_OBJECT
 public:
-	explicit OstcFirmwareCheck(QString product);
+	explicit OstcFirmwareCheck(const QString &product);
 	void checkLatest(QWidget *parent, device_data_t *data);
 public
 slots:

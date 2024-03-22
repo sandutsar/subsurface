@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "core/downloadfromdcthread.h" // for fill_computer_list
+#include "core/divelog.h"
 #include "core/errorhelper.h"
 #include "core/parse.h"
 #include "core/qt-gui.h"
@@ -46,7 +47,6 @@ int main(int argc, char **argv)
 	QStringList arguments = QCoreApplication::arguments();
 
 	const char *default_directory = system_default_directory();
-	const char *default_filename = system_default_filename();
 	subsurface_mkdir(default_directory);
 
 	for (i = 1; i < arguments.length(); i++) {
@@ -109,10 +109,9 @@ int main(int argc, char **argv)
 	if (!quit)
 		run_ui();
 	exit_ui();
+	clear_divelog(&divelog);
 	taglist_free(g_tag_list);
 	parse_xml_exit();
-	free((void *)default_directory);
-	free((void *)default_filename);
 	subsurface_console_exit();
 
 	// Sync struct preferences to disk
@@ -128,6 +127,13 @@ int main(int argc, char **argv)
 void validateGL()
 {
 	QString quickBackend = qgetenv("QT_QUICK_BACKEND");
+	/* on macOS with Qt6 (maybe others), things only work with the software backend */
+#if defined(Q_OS_MACOS) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+	if (quickBackend.isEmpty()) {
+		quickBackend = QStringLiteral("software");
+		qputenv("QT_QUICK_BACKEND", "software");
+	}
+#endif
 	/* an empty QT_QUICK_BACKEND env. variable means OpenGL (default).
 	 * only validate OpenGL; for everything else print out and return.
 	 * https://doc.qt.io/qt-5/qtquick-visualcanvas-adaptations.html

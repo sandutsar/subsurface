@@ -7,6 +7,7 @@
 
 struct dive;
 struct dive_trip;
+struct event;
 
 QString formatSac(const dive *d);
 QString formatNotes(const dive *d);
@@ -26,7 +27,9 @@ QString formatDiveGPS(const dive *d);
 QString formatDiveDate(const dive *d);
 QString formatDiveTime(const dive *d);
 QString formatDiveDateTime(const dive *d);
+QString formatDiveGasString(const dive *d);
 QString formatDayOfWeek(int day);
+QString formatMinutes(int seconds);
 QString formatTripTitle(const dive_trip *trip);
 QString formatTripTitleWithDives(const dive_trip *trip);
 

@@ -6,6 +6,7 @@
 
 #include "command_base.h"
 #include "command.h" // for EditCylinderType
+#include "core/divecomputer.h"
 #include "core/subsurface-qt/divelistnotifier.h"
 
 #include <QVector>
@@ -351,7 +352,7 @@ class EditProfile : public Base {
 	struct divecomputer dc;
 public:
 	// Note: source must be clean (i.e. fixup_dive must have been called on it).
-	EditProfile(const dive *source, EditProfileType type, int count);
+	EditProfile(const dive *source, int dcNr, EditProfileType type, int count);
 	~EditProfile();
 private:
 	void undo() override;
@@ -443,7 +444,7 @@ private:
 class EditSensors : public Base
 {
 public:
-	EditSensors(int cylIndex, int fromCylinder);
+	EditSensors(int cylIndex, int fromCylinder, int dcNr);
 
 private:
 	struct dive *d;

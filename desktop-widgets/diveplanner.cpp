@@ -5,6 +5,7 @@
 #include "core/planner.h"
 #include "core/qthelper.h"
 #include "core/units.h"
+#include "core/selection.h"
 #include "core/settings/qPrefDivePlanner.h"
 #include "core/subsurface-qt/divelistnotifier.h"
 #include "core/gettextfromc.h"
@@ -22,18 +23,17 @@
 #include <QBuffer>
 #endif
 
-DivePlannerWidget::DivePlannerWidget(QWidget *parent) : QWidget(parent, QFlag(0))
+DivePlannerWidget::DivePlannerWidget(dive &planned_dive, PlannerWidgets *parent)
 {
 	DivePlannerPointsModel *plannerModel = DivePlannerPointsModel::instance();
 	CylindersModel *cylinders = DivePlannerPointsModel::instance()->cylindersModel();
 
 	ui.setupUi(this);
-	ui.dateEdit->setDisplayFormat(prefs.date_format);
 	ui.tableWidget->setTitle(tr("Dive planner points"));
 	ui.tableWidget->setModel(plannerModel);
 	connect(ui.tableWidget, &TableView::itemClicked, plannerModel, &DivePlannerPointsModel::remove);
-	ui.tableWidget->view()->setItemDelegateForColumn(DivePlannerPointsModel::GAS, new AirTypesDelegate(this));
-	ui.tableWidget->view()->setItemDelegateForColumn(DivePlannerPointsModel::DIVEMODE, new DiveTypesDelegate(this));
+	ui.tableWidget->view()->setItemDelegateForColumn(DivePlannerPointsModel::GAS, new AirTypesDelegate(parent->gasModel.get(), this));
+	ui.tableWidget->view()->setItemDelegateForColumn(DivePlannerPointsModel::DIVEMODE, new DiveTypesDelegate(parent->diveTypeModel.get(), this));
 	ui.cylinderTableWidget->setTitle(tr("Available gases"));
 	ui.cylinderTableWidget->setBtnToolTip(tr("Add cylinder"));
 	ui.cylinderTableWidget->setModel(cylinders);
@@ -51,11 +51,14 @@ DivePlannerWidget::DivePlannerWidget(QWidget *parent) : QWidget(parent, QFlag(0)
 	view->setColumnHidden(CylindersModel::SIZE_INT, true);
 	view->setColumnHidden(CylindersModel::SENSORS, true);
 	view->setItemDelegateForColumn(CylindersModel::TYPE, new TankInfoDelegate(this));
+	auto tankUseDelegate = new TankUseDelegate(this);
+	tankUseDelegate->setCurrentDC(get_dive_dc(&planned_dive, 0));
+	view->setItemDelegateForColumn(CylindersModel::USE, tankUseDelegate);
 	connect(ui.cylinderTableWidget, &TableView::addButtonClicked, plannerModel, &DivePlannerPointsModel::addCylinder_clicked);
 	connect(ui.tableWidget, &TableView::addButtonClicked, plannerModel, &DivePlannerPointsModel::addDefaultStop);
-	connect(cylinders, &CylindersModel::dataChanged, GasSelectionModel::instance(), &GasSelectionModel::repopulate);
-	connect(cylinders, &CylindersModel::rowsInserted, GasSelectionModel::instance(), &GasSelectionModel::repopulate);
-	connect(cylinders, &CylindersModel::rowsRemoved, GasSelectionModel::instance(), &GasSelectionModel::repopulate);
+	connect(cylinders, &CylindersModel::dataChanged, parent, &PlannerWidgets::repopulateGasModel);
+	connect(cylinders, &CylindersModel::rowsInserted, parent, &PlannerWidgets::repopulateGasModel);
+	connect(cylinders, &CylindersModel::rowsRemoved, parent, &PlannerWidgets::repopulateGasModel);
 	connect(cylinders, &CylindersModel::dataChanged, plannerModel, &DivePlannerPointsModel::emitDataChanged);
 	connect(cylinders, &CylindersModel::dataChanged, plannerModel, &DivePlannerPointsModel::cylinderModelEdited);
 	connect(cylinders, &CylindersModel::rowsInserted, plannerModel, &DivePlannerPointsModel::cylinderModelEdited);
@@ -82,7 +85,7 @@ DivePlannerWidget::DivePlannerWidget(QWidget *parent) : QWidget(parent, QFlag(0)
 	// the depth will be done in settingChanged() since this depends on the chosen units.
 	ui.tableWidget->view()->setItemDelegateForColumn(DivePlannerPointsModel::RUNTIME, new SpinBoxDelegate(0, INT_MAX, 1, this));
 	ui.tableWidget->view()->setItemDelegateForColumn(DivePlannerPointsModel::DURATION, new SpinBoxDelegate(0, 6000, 1, this));
-	ui.tableWidget->view()->setItemDelegateForColumn(DivePlannerPointsModel::CCSETPOINT, new DoubleSpinBoxDelegate(0, 2, 0.1, this));
+	ui.tableWidget->view()->setItemDelegateForColumn(DivePlannerPointsModel::CCSETPOINT, new DoubleSpinBoxDelegate(0, 2, 0.01, this));
 
 	connect(&diveListNotifier, &DiveListNotifier::settingsChanged, this, &DivePlannerWidget::settingsChanged);
 
@@ -94,6 +97,10 @@ DivePlannerWidget::DivePlannerWidget(QWidget *parent) : QWidget(parent, QFlag(0)
 
 	setMinimumWidth(0);
 	setMinimumHeight(0);
+}
+
+DivePlannerWidget::~DivePlannerWidget()
+{
 }
 
 void DivePlannerWidget::setReplanButton(bool replan)
@@ -157,6 +164,9 @@ void DivePlannerWidget::settingsChanged()
 	ui.atmHeight->blockSignals(true);
 	ui.atmHeight->setValue((int) get_depth_units((int) pressure_to_altitude(DivePlannerPointsModel::instance()->getSurfacePressure()), NULL,NULL));
 	ui.atmHeight->blockSignals(false);
+
+	ui.dateEdit->setDisplayFormat(prefs.date_format);
+	ui.startTime->setDisplayFormat(prefs.time_format);
 }
 
 void DivePlannerWidget::atmPressureChanged(const int pressure)
@@ -206,7 +216,7 @@ void DivePlannerWidget::customSalinityChanged(double density)
 	}
 }
 
-void PlannerSettingsWidget::disableDecoElements(int mode)
+void PlannerSettingsWidget::disableDecoElements(int mode, divemode_t rebreathermode)
 {
 	if (mode == RECREATIONAL) {
 		ui.label_gflow->setDisabled(false);
@@ -242,8 +252,7 @@ void PlannerSettingsWidget::disableDecoElements(int mode)
 		ui.sacfactor->blockSignals(false);
 		ui.problemsolvingtime->blockSignals(false);
 		ui.display_variations->setDisabled(true);
-	}
-	else if (mode == VPMB) {
+	} else if (mode == VPMB) {
 		ui.label_gflow->setDisabled(true);
 		ui.label_gfhigh->setDisabled(true);
 		ui.gflow->setDisabled(true);
@@ -260,7 +269,7 @@ void PlannerSettingsWidget::disableDecoElements(int mode)
 			ui.backgasBreaks->setChecked(false);
 			ui.backgasBreaks->blockSignals(false);
 		}
-		ui.bailout->setDisabled(!(displayed_dive.dc.divemode == CCR || displayed_dive.dc.divemode == PSCR));
+		ui.bailout->setDisabled(!(rebreathermode == CCR || rebreathermode == PSCR));
 		ui.bottompo2->setDisabled(false);
 		ui.decopo2->setDisabled(false);
 		ui.safetystop->setDisabled(true);
@@ -277,8 +286,7 @@ void PlannerSettingsWidget::disableDecoElements(int mode)
 		ui.sacfactor->setValue(PlannerShared::sacfactor());
 		ui.problemsolvingtime->setValue(prefs.problemsolvingtime);
 		ui.display_variations->setDisabled(false);
-	}
-	else if (mode == BUEHLMANN) {
+	} else if (mode == BUEHLMANN) {
 		ui.label_gflow->setDisabled(false);
 		ui.label_gfhigh->setDisabled(false);
 		ui.gflow->setDisabled(false);
@@ -295,7 +303,7 @@ void PlannerSettingsWidget::disableDecoElements(int mode)
 			ui.backgasBreaks->setChecked(false);
 			ui.backgasBreaks->blockSignals(false);
 		}
-		ui.bailout->setDisabled(!(displayed_dive.dc.divemode == CCR || displayed_dive.dc.divemode == PSCR));
+		ui.bailout->setDisabled(!(rebreathermode == CCR || rebreathermode == PSCR));
 		ui.bottompo2->setDisabled(false);
 		ui.decopo2->setDisabled(false);
 		ui.safetystop->setDisabled(true);
@@ -333,7 +341,7 @@ void PlannerSettingsWidget::disableBackgasBreaks(bool enabled)
 	}
 }
 
-PlannerSettingsWidget::PlannerSettingsWidget(QWidget *parent) : QWidget(parent, QFlag(0))
+PlannerSettingsWidget::PlannerSettingsWidget(PlannerWidgets *parent)
 {
 	ui.setupUi(this);
 
@@ -364,7 +372,7 @@ PlannerSettingsWidget::PlannerSettingsWidget(QWidget *parent) : QWidget(parent, 
 	ui.recreational_deco->setChecked(prefs.planner_deco_mode == RECREATIONAL);
 	ui.buehlmann_deco->setChecked(prefs.planner_deco_mode == BUEHLMANN);
 	ui.vpmb_deco->setChecked(prefs.planner_deco_mode == VPMB);
-	disableDecoElements((int) prefs.planner_deco_mode);
+	disableDecoElements((int) prefs.planner_deco_mode, OC);
 
 	// should be the same order as in dive_comp_type!
 	QStringList rebreather_modes = QStringList();
@@ -403,9 +411,9 @@ PlannerSettingsWidget::PlannerSettingsWidget(QWidget *parent) : QWidget(parent, 
 	connect(ui.rebreathermode, QOverload<int>::of(&QComboBox::currentIndexChanged), plannerModel, &DivePlannerPointsModel::setRebreatherMode);
 	connect(ui.rebreathermode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &PlannerSettingsWidget::setBailoutVisibility);
 
-	connect(ui.recreational_deco, &QAbstractButton::clicked, [this] { disableDecoElements(RECREATIONAL); });
-	connect(ui.buehlmann_deco, &QAbstractButton::clicked, [this] { disableDecoElements(BUEHLMANN); });
-	connect(ui.vpmb_deco, &QAbstractButton::clicked, [this] { disableDecoElements(VPMB); });
+	connect(ui.recreational_deco, &QAbstractButton::clicked, [this, parent] { disableDecoElements(RECREATIONAL, parent->getRebreatherMode()); });
+	connect(ui.buehlmann_deco, &QAbstractButton::clicked, [this, parent] { disableDecoElements(BUEHLMANN, parent->getRebreatherMode()); });
+	connect(ui.vpmb_deco, &QAbstractButton::clicked, [this, parent] { disableDecoElements(VPMB, parent->getRebreatherMode()); });
 
 	connect(ui.sacfactor, QOverload<double>::of(&QDoubleSpinBox::valueChanged), &PlannerShared::set_sacfactor);
 	connect(ui.problemsolvingtime, QOverload<int>::of(&QSpinBox::valueChanged), plannerModel, &DivePlannerPointsModel::setProblemSolvingTime);
@@ -515,8 +523,8 @@ void PlannerSettingsWidget::setBackgasBreaks(bool dobreaks)
 
 void PlannerSettingsWidget::setBailoutVisibility(int mode)
 {
-		ui.bailout->setDisabled(!(mode == CCR || mode == PSCR));
-		ui.sacFactor->setDisabled(mode == CCR);
+	ui.bailout->setDisabled(!(mode == CCR || mode == PSCR));
+	ui.sacFactor->setDisabled(mode == CCR);
 }
 
 PlannerDetails::PlannerDetails(QWidget *parent) : QWidget(parent)
@@ -532,51 +540,81 @@ void PlannerDetails::setPlanNotes(QString plan)
 	ui.divePlanOutput->setHtml(plan);
 }
 
-PlannerWidgets::PlannerWidgets()
+PlannerWidgets::PlannerWidgets() :
+	planned_dive(alloc_dive()),
+	gasModel(std::make_unique<GasSelectionModel>()),
+	diveTypeModel(std::make_unique<DiveTypeSelectionModel>()),
+	plannerWidget(*planned_dive, this),
+	plannerSettingsWidget(this)
 {
 	connect(plannerDetails.printPlan(), &QPushButton::pressed, this, &PlannerWidgets::printDecoPlan);
 	connect(DivePlannerPointsModel::instance(), &DivePlannerPointsModel::calculatedPlanNotes,
 		&plannerDetails, &PlannerDetails::setPlanNotes);
 }
 
-void PlannerWidgets::planDive()
+PlannerWidgets::~PlannerWidgets()
+{
+}
+
+struct dive *PlannerWidgets::getDive() const
+{
+	return planned_dive.get();
+}
+
+divemode_t PlannerWidgets::getRebreatherMode() const
+{
+	return planned_dive->dc.divemode;
+}
+
+void PlannerWidgets::preparePlanDive(const dive *currentDive)
 {
 	DivePlannerPointsModel::instance()->setPlanMode(DivePlannerPointsModel::PLAN);
-	dc_number = 0;
-
 	// create a simple starting dive, using the first gas from the just copied cylinders
-	DivePlannerPointsModel::instance()->createSimpleDive(&displayed_dive);
+	DivePlannerPointsModel::instance()->createSimpleDive(planned_dive.get());
 
 	// plan the dive in the same mode as the currently selected one
-	if (current_dive) {
-		plannerSettingsWidget.setDiveMode(current_dive->dc.divemode);
-		plannerSettingsWidget.setBailoutVisibility(current_dive->dc.divemode);
-		if (current_dive->salinity)
-			plannerWidget.setSalinity(current_dive->salinity);
+	if (currentDive) {
+		plannerSettingsWidget.setDiveMode(currentDive->dc.divemode);
+		plannerSettingsWidget.setBailoutVisibility(currentDive->dc.divemode);
+		if (currentDive->salinity)
+			plannerWidget.setSalinity(currentDive->salinity);
 		else	// No salinity means salt water
 			plannerWidget.setSalinity(SEAWATER_SALINITY);
 	}
-	plannerWidget.setReplanButton(false);
-
-	plannerWidget.setupStartTime(timestampToDateTime(displayed_dive.when));	// This will reload the profile!
 }
 
-void PlannerWidgets::replanDive()
+void PlannerWidgets::planDive()
 {
-	if (!current_dive)
-		return;
-	copy_dive(current_dive, &displayed_dive); // Planning works on a copy of the dive (for now).
 	DivePlannerPointsModel::instance()->setPlanMode(DivePlannerPointsModel::PLAN);
-	DivePlannerPointsModel::instance()->loadFromDive(&displayed_dive);
+
+	repopulateGasModel();
+	plannerWidget.setReplanButton(false);
+	plannerWidget.setupStartTime(timestampToDateTime(planned_dive->when));	// This will reload the profile!
+}
+
+void PlannerWidgets::prepareReplanDive(const dive *d)
+{
+	copy_dive(d, planned_dive.get());
+}
+
+void PlannerWidgets::replanDive(int currentDC)
+{
+	DivePlannerPointsModel::instance()->setPlanMode(DivePlannerPointsModel::PLAN);
+	DivePlannerPointsModel::instance()->loadFromDive(planned_dive.get(), currentDC);
 
 	plannerWidget.setReplanButton(true);
-	plannerWidget.setupStartTime(timestampToDateTime(displayed_dive.when));
-	if (displayed_dive.surface_pressure.mbar)
-		plannerWidget.setSurfacePressure(displayed_dive.surface_pressure.mbar);
-	if (displayed_dive.salinity)
-		plannerWidget.setSalinity(displayed_dive.salinity);
-	reset_cylinders(&displayed_dive, true);
-	DivePlannerPointsModel::instance()->cylindersModel()->updateDive(&displayed_dive);
+	plannerWidget.setupStartTime(timestampToDateTime(planned_dive->when));
+	if (planned_dive->surface_pressure.mbar)
+		plannerWidget.setSurfacePressure(planned_dive->surface_pressure.mbar);
+	if (planned_dive->salinity)
+		plannerWidget.setSalinity(planned_dive->salinity);
+	reset_cylinders(planned_dive.get(), true);
+	DivePlannerPointsModel::instance()->cylindersModel()->updateDive(planned_dive.get(), currentDC);
+}
+
+void PlannerWidgets::repopulateGasModel()
+{
+	gasModel->repopulate(planned_dive.get());
 }
 
 void PlannerWidgets::printDecoPlan()
@@ -611,7 +649,7 @@ void PlannerWidgets::printDecoPlan()
 	painter.setRenderHint(QPainter::SmoothPixmapTransform);
 
 	auto profile = std::make_unique<ProfileScene>(1.0, true, false);
-	profile->draw(&painter, QRect(0, 0, pixmap.width(), pixmap.height()), &displayed_dive, 0, DivePlannerPointsModel::instance(), true);
+	profile->draw(&painter, QRect(0, 0, pixmap.width(), pixmap.height()), planned_dive.get(), 0, DivePlannerPointsModel::instance(), true);
 
 	QByteArray byteArray;
 	QBuffer buffer(&byteArray);

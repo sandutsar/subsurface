@@ -4,6 +4,7 @@
 #include "core/membuffer.h"
 #include "core/metrics.h"
 #include "core/settings/qPrefDisplay.h"
+#include "core/settings/qPrefTechnicalDetails.h"
 #include <QPropertyAnimation>
 #include <QGraphicsView>
 #include "core/qthelper.h"
@@ -14,28 +15,27 @@ void ToolTipItem::addToolTip(const QString &toolTip, const QPixmap &pixmap)
 
 	QGraphicsPixmapItem *iconItem = 0;
 	double yValue = title->boundingRect().height() + iconMetrics.spacing;
-	Q_FOREACH (ToolTip t, toolTips) {
+	for (ToolTip t: toolTips)
 		yValue += t.second->boundingRect().height();
-	}
-	if (entryToolTip.second) {
+	if (entryToolTip.second)
 		yValue += entryToolTip.second->boundingRect().height();
-	}
 	iconItem = new QGraphicsPixmapItem(this);
 	if (!pixmap.isNull())
 		iconItem->setPixmap(pixmap);
 	const int sp2 = iconMetrics.spacing * 2;
 	iconItem->setPos(sp2, yValue);
 
-	QGraphicsSimpleTextItem *textItem = new QGraphicsSimpleTextItem(toolTip, this);
+	QGraphicsTextItem *textItem = new QGraphicsTextItem(this);
+	textItem->setHtml(toolTip);
 	textItem->setPos(sp2 + iconMetrics.sz_small + sp2, yValue);
-	textItem->setBrush(QBrush(Qt::white));
+	textItem->setDefaultTextColor(Qt::white);
 	textItem->setFlag(ItemIgnoresTransformations);
 	toolTips.push_back(qMakePair(iconItem, textItem));
 }
 
 void ToolTipItem::clear()
 {
-	Q_FOREACH (ToolTip t, toolTips) {
+	for (ToolTip t: toolTips) {
 		delete t.first;
 		delete t.second;
 	}
@@ -77,7 +77,7 @@ void ToolTipItem::expand()
 	const IconMetrics &iconMetrics = defaultIconMetrics();
 
 	double width = 0, height = title->boundingRect().height() + iconMetrics.spacing;
-	Q_FOREACH (const ToolTip &t, toolTips) {
+	for (const ToolTip &t: toolTips) {
 		QRectF sRect = t.second->boundingRect();
 		if (sRect.width() > width)
 			width = sRect.width();
@@ -155,6 +155,9 @@ ToolTipItem::ToolTipItem(QGraphicsItem *parent) : RoundRectItem(8.0, parent),
 	title->setBrush(Qt::white);
 
 	setPen(QPen(Qt::white, 2));
+
+	connect(qPrefTechnicalDetails::instance(), &qPrefTechnicalDetails::infoboxChanged, this, &ToolTipItem::settingsChanged);
+
 	refreshTime.start();
 }
 
@@ -185,9 +188,8 @@ void ToolTipItem::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
 {
 	persistPos();
 	QGraphicsRectItem::mouseReleaseEvent(event);
-	Q_FOREACH (QGraphicsItem *item, oldSelection) {
+	for (QGraphicsItem *item: oldSelection)
 		item->setSelected(true);
-	}
 }
 
 void ToolTipItem::persistPos() const
@@ -251,7 +253,7 @@ void ToolTipItem::refresh(const dive *d, const QPointF &pos, bool inPlanner)
 		painter.setPen(QColor(0, 0, 0, 127));
 		for (int i = 0; i < 16; i++)
 			painter.drawLine(i, 60, i, 60 - entry->percentages[i] / 2);
-		entryToolTip.second->setText(QString::fromUtf8(mb.buffer, mb.len));
+		entryToolTip.second->setPlainText(QString::fromUtf8(mb.buffer, mb.len));
 	}
 	entryToolTip.first->setPixmap(tissues);
 
@@ -269,4 +271,9 @@ void ToolTipItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
 	oldSelection = scene()->selectedItems();
 	scene()->clearSelection();
 	QGraphicsItem::mousePressEvent(event);
+}
+
+void ToolTipItem::settingsChanged(bool value)
+{
+	setVisible(value);
 }

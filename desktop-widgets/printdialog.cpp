@@ -19,9 +19,9 @@
 
 template_options::color_palette_struct ssrf_colors, almond_colors, blueshades_colors, custom_colors;
 
-PrintDialog::PrintDialog(bool inPlanner, QWidget *parent) :
+PrintDialog::PrintDialog(dive *singleDive, QWidget *parent) :
 	QDialog(parent, QFlag(0)),
-	inPlanner(inPlanner),
+	singleDive(singleDive),
 	printer(NULL),
 	qprinter(NULL)
 {
@@ -155,6 +155,7 @@ void PrintDialog::onFinished()
 	s.setValue("color_selected", printOptions.color_selected);
 	s.setValue("template_selected", printOptions.p_template);
 	s.setValue("resolution", printOptions.resolution);
+	s.setValue("landscape", printOptions.landscape);
 
 	// save template settings
 	s.setValue("font", templateOptions.font_index);
@@ -178,7 +179,7 @@ void PrintDialog::createPrinterObj()
 		qprinter = new QPrinter;
 		qprinter->setResolution(printOptions.resolution);
 		qprinter->setOrientation((QPrinter::Orientation)printOptions.landscape);
-		printer = new Printer(qprinter, printOptions, templateOptions, Printer::PRINT, inPlanner);
+		printer = new Printer(qprinter, printOptions, templateOptions, Printer::PRINT, singleDive);
 	}
 }
 

@@ -31,11 +31,13 @@ public:
 	std::pair<double, double> screenMinMax() const;
 	double valueAt(const QPointF &p) const;
 	double posAtValue(double value) const;
+	double deltaToValue(double delta) const; // For panning: turn a screen distance to delta-value
 	void setPosition(const QRectF &rect);
 	double screenPosition(double pos) const; // 0.0 = begin, 1.0 = end of axis, independent of represented values
 	double pointInRange(double pos) const; // Point on screen is in range of axis
 	void setTextVisible(bool arg1);
 	void setLinesVisible(bool arg1);
+	void setGridIsMultipleOfThree(bool arg1);
 	void updateTicks(int animSpeed);
 	double width() const; // only for vertical axes
 	double height() const; // only for horizontal axes
@@ -75,6 +77,7 @@ private:
 	double min, max;
 	bool textVisibility;
 	bool lineVisibility;
+	bool gridIsMultipleOfThree;
 	double labelScale;
 	double dpr;
 	double labelWidth, labelHeight; // maximum expected sizes of label width and height

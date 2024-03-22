@@ -3,11 +3,11 @@
 # this is run inside the docker container
 cd /__w
 
-[ ! -d mxe ] || ln -s /win/mxe .
+[ -d mxe ] || ln -s /win/mxe .
 
 # grab the version number
 cd subsurface
-VERSION=$(./scripts/get-version linux)
+VERSION=$(./scripts/get-version)
 cd ..
 
 # prep the container

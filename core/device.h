@@ -14,7 +14,6 @@ struct device_table;
 struct dive_table;
 
 // global device table
-extern struct device_table device_table;
 extern struct fingerprint_table fingerprint_table;
 
 extern int create_device_node(struct device_table *table, const char *model, const char *serial, const char *nickname);
@@ -55,7 +54,6 @@ extern uint32_t fp_get_model(struct fingerprint_table *table, unsigned int i);
 extern uint32_t fp_get_serial(struct fingerprint_table *table, unsigned int i);
 extern uint32_t fp_get_deviceid(struct fingerprint_table *table, unsigned int i);
 extern uint32_t fp_get_diveid(struct fingerprint_table *table, unsigned int i);
-extern char *fp_get_data(struct fingerprint_table *table, unsigned int i);
 
 extern int is_default_dive_computer_device(const char *);
 
@@ -100,6 +98,8 @@ struct fingerprint_table {
 	// Keep the fingerprint records in a vector sorted by (model, serial) - these are uint32_t here
 	std::vector<fingerprint_record> fingerprints;
 };
+
+std::string fp_get_data(struct fingerprint_table *table, unsigned int i);
 
 #endif
 

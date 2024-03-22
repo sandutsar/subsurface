@@ -40,12 +40,13 @@ public:
 	void setTimeAxis(DiveCartesianAxis *axis);
 	void setPlotInfo(const plot_info &plot);
 	void clearPlotInfo();
+	void settingsChanged(bool value);
 public
 slots:
 	void setRect(const QRectF &rect);
 
 private:
-	typedef QPair<QGraphicsPixmapItem *, QGraphicsSimpleTextItem *> ToolTip;
+	typedef QPair<QGraphicsPixmapItem *, QGraphicsTextItem *> ToolTip;
 	QVector<ToolTip> toolTips;
 	ToolTip entryToolTip;
 	QGraphicsSimpleTextItem *title;

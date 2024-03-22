@@ -7,6 +7,7 @@
 #include <limits.h>
 #include <string.h>
 #include <assert.h>
+#include <stdlib.h>
 
 #include "dive.h"
 #include "divelist.h"
@@ -18,6 +19,7 @@
 #include "profile.h"
 #include "gaspressures.h"
 #include "deco.h"
+#include "errorhelper.h"
 #include "libdivecomputer/parser.h"
 #include "libdivecomputer/version.h"
 #include "membuffer.h"
@@ -29,9 +31,6 @@
 #define MAX_PROFILE_DECO 7200
 
 extern int ascent_velocity(int depth, int avg_depth, int bottom_time);
-
-struct dive *current_dive = NULL;
-unsigned int dc_number = 0;
 
 #ifdef DEBUG_PI
 /* debugging tool - not normally used */
@@ -200,7 +199,7 @@ int get_cylinder_index(const struct dive *dive, const struct event *ev)
 	 * We now match up gas change events with their cylinders at dive
 	 * event fixup time.
 	 */
-	SSRF_INFO("Still looking up cylinder based on gas mix in get_cylinder_index()!\n");
+	report_info("Still looking up cylinder based on gas mix in get_cylinder_index()!\n");
 
 	mix = get_gasmix_from_event(dive, ev);
 	best = find_best_gasmix_match(mix, &dive->cylinders);
@@ -285,7 +284,7 @@ static void calculate_max_limits_new(const struct dive *dive, const struct divec
 		int mbar_end = get_cylinder(dive, cyl)->end.mbar;
 		if (mbar_start > maxpressure)
 			maxpressure = mbar_start;
-		if (mbar_end < minpressure)
+		if (mbar_end && mbar_end < minpressure)
 			minpressure = mbar_end;
 	}
 
@@ -308,19 +307,22 @@ static void calculate_max_limits_new(const struct dive *dive, const struct divec
 
 		while (--i >= 0) {
 			int depth = s->depth.mm;
-			int pressure = s->pressure[0].mbar;
 			int temperature = s->temperature.mkelvin;
 			int heartbeat = s->heartbeat;
+
+			for (int sensor = 0; sensor < MAX_SENSORS; ++sensor) {
+				int pressure = s->pressure[sensor].mbar;
+				if (pressure && pressure < minpressure)
+					minpressure = pressure;
+				if (pressure > maxpressure)
+					maxpressure = pressure;
+			}
 
 			if (!mintemp && temperature < mintemp)
 				mintemp = temperature;
 			if (temperature > maxtemp)
 				maxtemp = temperature;
 
-			if (pressure && pressure < minpressure)
-				minpressure = pressure;
-			if (pressure > maxpressure)
-				maxpressure = pressure;
 			if (heartbeat > maxhr)
 				maxhr = heartbeat;
 			if (heartbeat && heartbeat < minhr)
@@ -475,9 +477,9 @@ static void populate_plot_entries(const struct dive *dive, const struct divecomp
 		entry->cns = sample->cns;
 		if (dc->divemode == CCR || (dc->divemode == PSCR && dc->no_o2sensors)) {
 			entry->o2pressure.mbar = entry->o2setpoint.mbar = sample->setpoint.mbar;     // for rebreathers
-			entry->o2sensor[0].mbar = sample->o2sensor[0].mbar; // for up to three rebreather O2 sensors
-			entry->o2sensor[1].mbar = sample->o2sensor[1].mbar;
-			entry->o2sensor[2].mbar = sample->o2sensor[2].mbar;
+			int i;
+			for (i = 0; i < MAX_O2_SENSORS; i++)
+				entry->o2sensor[i].mbar = sample->o2sensor[i].mbar;
 		} else {
 			entry->pressures.o2 = sample->setpoint.mbar / 1000.0;
 		}
@@ -705,9 +707,27 @@ static void calculate_sac(const struct dive *dive, const struct divecomputer *dc
 
 static void populate_secondary_sensor_data(const struct divecomputer *dc, struct plot_info *pi)
 {
-	UNUSED(dc);
-	UNUSED(pi);
+	int *seen = calloc(pi->nr_cylinders, sizeof(*seen));
+	for (int idx = 0; idx < pi->nr; ++idx)
+		for (int c = 0; c < pi->nr_cylinders; ++c)
+			if (get_plot_pressure_data(pi, idx, SENSOR_PR, c))
+				++seen[c]; // Count instances so we can differentiate a real sensor from just start and end pressure
+	int idx = 0;
 	/* We should try to see if it has interesting pressure data here */
+	for (int i = 0; i < dc->samples && idx < pi->nr; i++) {
+		struct sample *sample = dc->sample + i;
+		for (; idx < pi->nr; ++idx) {
+			if (idx == pi->nr - 1 || pi->entry[idx].sec >= sample->time.seconds)
+				// We've either found the entry at or just after the sample's time,
+				// or this is the last entry so use for the last sensor readings if there are any.
+				break;
+		}
+		for (int s = 0; s < MAX_SENSORS; ++s)
+			// Copy sensor data if available, but don't add if this dc already has sensor data
+			if (sample->sensor[s] != NO_SENSOR && seen[sample->sensor[s]] < 3 && sample->pressure[s].mbar)
+				set_plot_pressure_data(pi, idx, SENSOR_PR, sample->sensor[s], sample->pressure[s].mbar);
+	}
+	free(seen);
 }
 
 /*
@@ -732,12 +752,14 @@ static void setup_gas_sensor_pressure(const struct dive *dive, const struct dive
 	if (pi->nr_cylinders == 0)
 		return;
 
-	int *seen = malloc(pi->nr_cylinders * sizeof(*seen));
-	int *first = malloc(pi->nr_cylinders * sizeof(*first));
-	int *last = malloc(pi->nr_cylinders * sizeof(*last));
+	/* FIXME: The planner uses a dummy one-past-end cylinder for surface air! */
+	int num_cyl = pi->nr_cylinders + 1;
+	int *seen = malloc(num_cyl * sizeof(*seen));
+	int *first = malloc(num_cyl * sizeof(*first));
+	int *last = malloc(num_cyl * sizeof(*last));
 	const struct divecomputer *secondary;
 
-	for (i = 0; i < pi->nr_cylinders; i++) {
+	for (i = 0; i < num_cyl; i++) {
 		seen[i] = 0;
 		first[i] = 0;
 		last[i] = INT_MAX;
@@ -750,7 +772,11 @@ static void setup_gas_sensor_pressure(const struct dive *dive, const struct dive
 		int sec = ev->time.seconds;
 
 		if (cyl < 0)
+			continue; // unknown cylinder
+		if (cyl >= num_cyl) {
+			fprintf(stderr, "setup_gas_sensor_pressure(): invalid cylinder idx %d\n", cyl);
 			continue;
+		}
 
 		last[prev] = sec;
 		prev = cyl;
@@ -807,13 +833,13 @@ static void setup_gas_sensor_pressure(const struct dive *dive, const struct dive
 	/*
 	 * Here, we should try to walk through all the dive computers,
 	 * and try to see if they have sensor data different from the
-	 * primary dive computer (dc).
+	 * current dive computer (dc).
 	 */
 	secondary = &dive->dc;
 	do {
 		if (secondary == dc)
 			continue;
-		populate_secondary_sensor_data(dc, pi);
+		populate_secondary_sensor_data(secondary, pi);
 	} while ((secondary = secondary->next) != NULL);
 
 	free(seen);
@@ -831,7 +857,7 @@ static void calculate_ndl_tts(struct deco_state *ds, const struct dive *dive, st
 	const int ascent_s_per_deco_step = 1;
 	/* how long time steps in deco calculations? */
 	const int time_stepsize = 60;
-	const int deco_stepsize = 3000;
+	const int deco_stepsize = M_OR_FT(3, 10);
 	/* at what depth is the current deco-step? */
 	int next_stop = ROUND_UP(deco_allowed_depth(
 					 tissue_tolerance_calc(ds, dive, depth_to_bar(entry->depth, dive), in_planner),
@@ -946,7 +972,7 @@ static void calculate_deco_information(struct deco_state *ds, const struct deco_
 			entry->ambpressure = depth_to_bar(entry->depth, dive);
 			entry->gfline = get_gf(ds, entry->ambpressure, dive) * (100.0 - AMB_PERCENTAGE) + AMB_PERCENTAGE;
 			if (t0 > t1) {
-				SSRF_INFO("non-monotonous dive stamps %d %d\n", t0, t1);
+				report_info("non-monotonous dive stamps %d %d\n", t0, t1);
 				int xchg = t1;
 				t1 = t0;
 				t0 = xchg;
@@ -1098,48 +1124,76 @@ static void calculate_deco_information(struct deco_state *ds, const struct deco_
 	unlock_planner();
 }
 
+/* Sort the o2 pressure values. There are so few that a simple bubble sort
+ * will do */
+
+void sort_o2_pressures(int *sensorn, int np, struct plot_data *entry)
+{
+	int smallest, position, old;
+
+	for (int i = 0; i < np - 1; i++) {
+		position = i;
+		smallest = entry->o2sensor[sensorn[i]].mbar;
+		for (int j = i+1; j < np; j++)
+			if (entry->o2sensor[sensorn[j]].mbar < smallest) {
+				position = j;
+				smallest = entry->o2sensor[sensorn[j]].mbar;
+			}
+		old = sensorn[i];
+		sensorn[i] = position;
+		sensorn[position] = old;
+	}
+}
 
 /* Function calculate_ccr_po2: This function takes information from one plot_data structure (i.e. one point on
  * the dive profile), containing the oxygen sensor values of a CCR system and, for that plot_data structure,
- * calculates the po2 value from the sensor data. Several rules are applied, depending on how many o2 sensors
- * there are and the differences among the readings from these sensors.
+ * calculates the po2 value from the sensor data. If there are at least 3 sensors, sensors are voted out until
+ * their span is within diff_limit.
  */
 static int calculate_ccr_po2(struct plot_data *entry, const struct divecomputer *dc)
 {
-	int sump = 0, minp = 999999, maxp = -999999;
-	int diff_limit = 100; // The limit beyond which O2 sensor differences are considered significant (default = 100 mbar)
+	int sump = 0, minp = 0, maxp = 0;
+	int sensorn[MAX_O2_SENSORS];
 	int i, np = 0;
 
-	for (i = 0; i < dc->no_o2sensors; i++)
+	for (i = 0; i < dc->no_o2sensors && i < MAX_O2_SENSORS; i++)
 		if (entry->o2sensor[i].mbar) { // Valid reading
-			++np;
+			sensorn[np++] = i;
 			sump += entry->o2sensor[i].mbar;
-			minp = MIN(minp, entry->o2sensor[i].mbar);
-			maxp = MAX(maxp, entry->o2sensor[i].mbar);
 		}
-	switch (np) {
-	case 0: // Uhoh
+	if (np == 0)
 		return entry->o2pressure.mbar;
-	case 1: // Return what we have
-		return sump;
-	case 2: // Take the average
-		return sump / 2;
-	case 3:						   // Voting logic
-		if (2 * maxp - sump + minp < diff_limit) { // Upper difference acceptable...
-			if (2 * minp - sump + maxp)	// ...and lower difference acceptable
-				return sump / 3;
-			else
-				return (sump - minp) / 2;
-		} else {
-			if (2 * minp - sump + maxp) // ...but lower difference acceptable
-				return (sump - maxp) / 2;
-			else
-				return sump / 3;
+	else if (np == 1)
+		return entry->o2sensor[sensorn[0]].mbar;
+
+	maxp = np - 1;
+	sort_o2_pressures(sensorn, np, entry);
+
+	// This is the Shearwater voting logic: If there are still at least three sensors and one
+	// differs by more than 20% from the closest it is voted out.
+	while (maxp - minp > 1) {
+		if (entry->o2sensor[sensorn[minp + 1]].mbar - entry->o2sensor[sensorn[minp]].mbar >
+		    sump / (maxp - minp + 1) / 5) {
+			sump -= entry->o2sensor[sensorn[minp]].mbar;
+			++minp;
+			continue;
 		}
-	default: // This should not happen
-		assert(np <= 3);
-		return 0;
+		if (entry->o2sensor[sensorn[maxp]].mbar - entry->o2sensor[sensorn[maxp - 1]].mbar >
+		    sump / (maxp - minp +1) / 5) {
+			sump -= entry->o2sensor[sensorn[maxp]].mbar;
+			--maxp;
+			continue;
+		}
+		break;
 	}
+
+	return sump / (maxp - minp + 1);
+
+}
+
+static double gas_density(const struct gas_pressures *pressures)
+{
+	return (pressures->o2 * O2_DENSITY + pressures->he * HE_DENSITY + pressures->n2 * N2_DENSITY) / 1000.0;
 }
 
 static void calculate_gas_information_new(const struct dive *dive, const struct divecomputer *dc, struct plot_info *pi)
@@ -1178,7 +1232,7 @@ static void calculate_gas_information_new(const struct dive *dive, const struct 
 				       entry->pressures.n2 / amb_pressure * N2_DENSITY +
 				       entry->pressures.he / amb_pressure * HE_DENSITY) /
 				      (O2_IN_AIR * O2_DENSITY + N2_IN_AIR * N2_DENSITY) * 1000), dive);
-		entry->density = gas_density(gasmix, depth_to_mbar(entry->depth, dive));
+		entry->density = gas_density(&entry->pressures);
 		if (entry->mod < 0)
 			entry->mod = 0;
 		if (entry->ead < 0)
@@ -1278,9 +1332,9 @@ void create_plot_info_new(const struct dive *dive, const struct divecomputer *dc
 	free_plot_info_data(pi);
 	calculate_max_limits_new(dive, dc, pi, in_planner);
 	get_dive_gas(dive, &o2, &he, &o2max);
-	if (dc->divemode == FREEDIVE){
-		pi->dive_type = FREEDIVE;
-	} else 	if (he > 0) {
+	if (dc->divemode == FREEDIVE) {
+		pi->dive_type = FREEDIVING;
+	} else if (he > 0) {
 		pi->dive_type = TRIMIX;
 	} else {
 		if (o2)
@@ -1488,9 +1542,8 @@ void compare_samples(const struct dive *d, const struct plot_info *pi, int idx1,
 	char *buf2 = malloc(bufsize);
 	int avg_speed, max_asc_speed, max_desc_speed;
 	int delta_depth, avg_depth, max_depth, min_depth;
-	int bar_used, last_pressure, next_pressure, pressurevalue;
+	int pressurevalue;
 	int last_sec, delta_time;
-	bool crossed_tankchange = false;
 
 	double depthvalue, speedvalue;
 
@@ -1521,10 +1574,15 @@ void compare_samples(const struct dive *d, const struct plot_info *pi, int idx1,
 	avg_depth = 0;
 	max_depth = 0;
 	min_depth = INT_MAX;
-	bar_used = 0;
 
 	last_sec = start->sec;
-	last_pressure = get_plot_pressure(pi, idx1, 0);
+
+	volume_t cylinder_volume = { .mliter = 0, };
+	int *start_pressures = calloc((size_t)pi->nr_cylinders, sizeof(int));
+	int *last_pressures = calloc((size_t)pi->nr_cylinders, sizeof(int));
+	int *bar_used = calloc((size_t)pi->nr_cylinders, sizeof(int));
+	int *volumes_used = calloc((size_t)pi->nr_cylinders, sizeof(int));
+	bool *cylinder_is_used = calloc((size_t)pi->nr_cylinders, sizeof(bool));
 
 	data = start;
 	for (int i = idx1; i < idx2; ++i) {
@@ -1544,14 +1602,36 @@ void compare_samples(const struct dive *d, const struct plot_info *pi, int idx1,
 			min_depth = data->depth;
 		if (data->depth > max_depth)
 			max_depth = data->depth;
-		/* Try to detect gas changes - this hack might work for some side mount scenarios? */
-		next_pressure = get_plot_pressure(pi, i, 0);
-		if (next_pressure < last_pressure + 2000)
-			bar_used += last_pressure - next_pressure;
+
+		for (unsigned cylinder_index = 0; cylinder_index < pi->nr_cylinders; cylinder_index++) {
+			int next_pressure = get_plot_pressure(pi, i, cylinder_index);
+			if (next_pressure && !start_pressures[cylinder_index])
+				start_pressures[cylinder_index] = next_pressure;
+
+			if (start_pressures[cylinder_index]) {
+				if (last_pressures[cylinder_index]) {
+					bar_used[cylinder_index] += last_pressures[cylinder_index] - next_pressure;
+
+					cylinder_t *cyl = get_cylinder(d, cylinder_index);
+
+					volumes_used[cylinder_index] += gas_volume(cyl, (pressure_t){ last_pressures[cylinder_index] }) - gas_volume(cyl, (pressure_t){ next_pressure });
+				}
+
+				// check if the gas in this cylinder is being used
+				if (next_pressure < start_pressures[cylinder_index] - 1000 && !cylinder_is_used[cylinder_index]) {
+					cylinder_is_used[cylinder_index] = true;
+				}
+			}
+
+			last_pressures[cylinder_index] = next_pressure;
+		}
 
 		last_sec = data->sec;
-		last_pressure = next_pressure;
 	}
+
+	free(start_pressures);
+	free(last_pressures);
+
 	avg_depth /= stop->sec - start->sec;
 	avg_speed /= stop->sec - start->sec;
 
@@ -1584,39 +1664,52 @@ void compare_samples(const struct dive *d, const struct plot_info *pi, int idx1,
 
 	speedvalue = get_vertical_speed_units(abs(avg_speed), NULL, &vertical_speed_unit);
 	snprintf_loc(buf, bufsize, translate("gettextFromC", "%s øV:%.2f%s"), buf2, speedvalue, vertical_speed_unit);
-	memcpy(buf2, buf, bufsize);
 
-	/* Only print if gas has been used */
-	if (bar_used && d->cylinders.nr > 0) {
-		pressurevalue = get_pressure_units(bar_used, &pressure_unit);
-		memcpy(buf2, buf, bufsize);
-		snprintf_loc(buf, bufsize, translate("gettextFromC", "%s ΔP:%d%s"), buf2, pressurevalue, pressure_unit);
-		cylinder_t *cyl = get_cylinder(d, 0);
-		/* if we didn't cross a tank change and know the cylidner size as well, show SAC rate */
-		if (!crossed_tankchange && cyl->type.size.mliter) {
-			double volume_value;
-			int volume_precision;
-			const char *volume_unit;
-			int first = idx1;
-			int last = idx2;
-			while (first < last && get_plot_pressure(pi, first, 0) == 0)
-				first++;
-			while (last > first && get_plot_pressure(pi, last, 0) == 0)
-				last--;
+	int total_bar_used = 0;
+	int total_volume_used = 0;
+	bool cylindersizes_are_identical = true;
+	bool sac_is_determinable = true;
+	for (unsigned cylinder_index = 0; cylinder_index < pi->nr_cylinders; cylinder_index++)
+		if (cylinder_is_used[cylinder_index]) {
+			total_bar_used += bar_used[cylinder_index];
+			total_volume_used += volumes_used[cylinder_index];
 
-			pressure_t first_pressure = { get_plot_pressure(pi, first, 0) };
-			pressure_t stop_pressure = { get_plot_pressure(pi, last, 0) };
-			int volume_used = gas_volume(cyl, first_pressure) - gas_volume(cyl, stop_pressure);
-
-			/* Mean pressure in ATM */
-			double atm = depth_to_atm(avg_depth, d);
-
-			/* milliliters per minute */
-			int sac = lrint(volume_used / atm * 60 / delta_time);
-			memcpy(buf2, buf, bufsize);
-			volume_value = get_volume_units(sac, &volume_precision, &volume_unit);
-			snprintf_loc(buf, bufsize, translate("gettextFromC", "%s SAC:%.*f%s/min"), buf2, volume_precision, volume_value, volume_unit);
+			cylinder_t *cyl = get_cylinder(d, cylinder_index);
+			if (cyl->type.size.mliter) {
+				if (cylinder_volume.mliter && cylinder_volume.mliter != cyl->type.size.mliter) {
+					cylindersizes_are_identical = false;
+				} else {
+					cylinder_volume.mliter = cyl->type.size.mliter;
+				}
+			} else {
+				sac_is_determinable = false;
+			}
 		}
+	free(bar_used);
+	free(volumes_used);
+	free(cylinder_is_used);
+
+	// No point printing 'bar used' if we know it's meaningless because cylinders of different size were used
+	if (cylindersizes_are_identical && total_bar_used) {
+			pressurevalue = get_pressure_units(total_bar_used, &pressure_unit);
+			memcpy(buf2, buf, bufsize);
+			snprintf_loc(buf, bufsize, translate("gettextFromC", "%s ΔP:%d%s"), buf2, pressurevalue, pressure_unit);
+	}
+
+	// We can't calculate the SAC if the volume for some of the cylinders used is unknown
+	if (sac_is_determinable && total_volume_used) {
+		double volume_value;
+		int volume_precision;
+		const char *volume_unit;
+
+		/* Mean pressure in ATM */
+		double atm = depth_to_atm(avg_depth, d);
+
+		/* milliliters per minute */
+		int sac = lrint(total_volume_used / atm * 60 / delta_time);
+		memcpy(buf2, buf, bufsize);
+		volume_value = get_volume_units(sac, &volume_precision, &volume_unit);
+		snprintf_loc(buf, bufsize, translate("gettextFromC", "%s SAC:%.*f%s/min"), buf2, volume_precision, volume_value, volume_unit);
 	}
 
 	free(buf2);

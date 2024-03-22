@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "TabDivePhotos.h"
+#include "maintab.h"
 #include "ui_TabDivePhotos.h"
 #include "core/imagedownloader.h"
 
@@ -11,14 +12,15 @@
 #include <QUrl>
 #include <QMessageBox>
 #include <QFileInfo>
-#include "core/save-profiledata.h"
 #include "core/membuffer.h"
+#include "core/save-profiledata.h"
+#include "core/selection.h"
 
 //TODO: Remove those in the future.
 #include "../mainwindow.h"
 #include "../divelistview.h"
 
-TabDivePhotos::TabDivePhotos(QWidget *parent)
+TabDivePhotos::TabDivePhotos(MainTab *parent)
 	: TabBase(parent),
 	ui(new Ui::TabDivePhotos()),
 	divePictureModel(DivePictureModel::instance())
@@ -47,7 +49,8 @@ TabDivePhotos::~TabDivePhotos()
 
 void TabDivePhotos::clear()
 {
-	updateData();
+	// TODO: clear model
+	divePictureModel->updateDivePictures();
 }
 
 void TabDivePhotos::contextMenuEvent(QContextMenuEvent *event)
@@ -111,7 +114,7 @@ void TabDivePhotos::recalculateSelectedThumbnails()
 
 void TabDivePhotos::saveSubtitles()
 {
-	if (!current_dive)
+	if (!parent.currentDive)
 		return;
 	if (!ui->photosView->selectionModel()->hasSelection())
 		return;
@@ -129,7 +132,7 @@ void TabDivePhotos::saveSubtitles()
 				if (!duration)
 					continue;
 				struct membufferpp b;
-				save_subtitles_buffer(&b, current_dive, offset, duration);
+				save_subtitles_buffer(&b, parent.currentDive, offset, duration);
 				const char *data = mb_cstring(&b);
 				subtitlefile.open(QIODevice::WriteOnly);
 				subtitlefile.write(data, strlen(data));
@@ -158,8 +161,9 @@ void TabDivePhotos::removeAllPhotos()
 	}
 }
 
-void TabDivePhotos::updateData()
+void TabDivePhotos::updateData(const std::vector<dive *> &, dive *currentDive, int)
 {
+	// TODO: pass dive
 	divePictureModel->updateDivePictures();
 }
 

@@ -5,6 +5,7 @@
  *
  * (c) Dirk Hohndel 2013
  */
+#include <stdlib.h>
 #include <assert.h>
 #include <unistd.h>
 #include <ctype.h>
@@ -92,7 +93,7 @@ int get_cylinderid_at_time(struct dive *dive, struct divecomputer *dc, duration_
 	return cylinder_idx;
 }
 
-int get_gasidx(struct dive *dive, struct gasmix mix)
+static int get_gasidx(struct dive *dive, struct gasmix mix)
 {
 	return find_best_gasmix_match(mix, &dive->cylinders);
 }
@@ -339,7 +340,7 @@ void free_dps(struct diveplan *diveplan)
 	diveplan->dp = NULL;
 }
 
-struct divedatapoint *create_dp(int time_incr, int depth, int cylinderid, int po2)
+static struct divedatapoint *create_dp(int time_incr, int depth, int cylinderid, int po2)
 {
 	struct divedatapoint *dp;
 
@@ -405,7 +406,7 @@ static struct gaschanges *analyze_gaslist(struct diveplan *diveplan, struct dive
 	int nr = 0;
 	struct gaschanges *gaschanges = NULL;
 	struct divedatapoint *dp = diveplan->dp;
-	int best_depth = get_cylinder(dive, *asc_cylinder)->depth.mm;
+	struct divedatapoint *best_ascent_dp = NULL;
 	bool total_time_zero = true;
 	while (dp) {
 		if (dp->time == 0 && total_time_zero && (ccr == (bool) setpoint_change(dive, dp->cylinderid))) {
@@ -425,9 +426,8 @@ static struct gaschanges *analyze_gaslist(struct diveplan *diveplan, struct dive
 				assert(gaschanges[i].gasidx != -1);
 			} else {
 				/* is there a better mix to start deco? */
-				if (dp->depth.mm < best_depth) {
-					best_depth = dp->depth.mm;
-					*asc_cylinder = dp->cylinderid;
+				if (!best_ascent_dp || dp->depth.mm < best_ascent_dp->depth.mm) {
+					best_ascent_dp = dp;
 				}
 			}
 		} else {
@@ -436,6 +436,9 @@ static struct gaschanges *analyze_gaslist(struct diveplan *diveplan, struct dive
 		dp = dp->next;
 	}
 	*gaschangenr = nr;
+	if (best_ascent_dp) {
+		*asc_cylinder = best_ascent_dp->cylinderid;
+	}
 #if DEBUG_PLAN & 16
 	for (nr = 0; nr < *gaschangenr; nr++) {
 		int idx = gaschanges[nr].gasidx;
@@ -678,7 +681,7 @@ bool plan(struct deco_state *ds, struct diveplan *diveplan, struct dive *dive, i
 	int clock, previous_point_time;
 	int avg_depth, max_depth;
 	int last_ascend_rate;
-	int best_first_ascend_cylinder;
+	int best_first_ascend_cylinder = -1;
 	struct gasmix gas, bottom_gas;
 	bool o2break_next = false;
 	int break_cylinder = -1, breakfrom_cylinder = 0;
@@ -693,9 +696,20 @@ bool plan(struct deco_state *ds, struct diveplan *diveplan, struct dive *dive, i
 
 	set_gf(diveplan->gflow, diveplan->gfhigh);
 	set_vpmb_conservatism(diveplan->vpmb_conservatism);
-	if (!diveplan->surface_pressure)
-		diveplan->surface_pressure = SURFACE_PRESSURE;
-	dive->surface_pressure.mbar = diveplan->surface_pressure;
+
+	if (!diveplan->surface_pressure) {
+		// Lets use dive's surface pressure in planner, if have one...
+		if (dive->dc.surface_pressure.mbar) { // First from DC...
+			diveplan->surface_pressure = dive->dc.surface_pressure.mbar;
+		}
+		else if (dive->surface_pressure.mbar) { // After from user...
+			diveplan->surface_pressure = dive->surface_pressure.mbar;
+		}
+		else {
+			diveplan->surface_pressure = SURFACE_PRESSURE;
+		}
+	}
+	
 	clear_deco(ds, dive->surface_pressure.mbar / 1000.0, true);
 	ds->max_bottom_ceiling_pressure.mbar = ds->first_ceiling_pressure.mbar = 0;
 	create_dive_from_plan(diveplan, dive, is_planner);
@@ -752,7 +766,6 @@ bool plan(struct deco_state *ds, struct diveplan *diveplan, struct dive *dive, i
 	printf("current_cylinder %i\n", current_cylinder);
 #endif
 
-	best_first_ascend_cylinder = current_cylinder;
 	/* Find the gases available for deco */
 
 	gaschanges = analyze_gaslist(diveplan, dive, &gaschangenr, depth, &best_first_ascend_cylinder, divemode == CCR && !prefs.dobailout);
@@ -827,7 +840,7 @@ bool plan(struct deco_state *ds, struct diveplan *diveplan, struct dive *dive, i
 		return false;
 	}
 
-	if (best_first_ascend_cylinder != current_cylinder) {
+	if (best_first_ascend_cylinder != -1 && best_first_ascend_cylinder != current_cylinder) {
 		current_cylinder = best_first_ascend_cylinder;
 		gas = get_cylinder(dive, current_cylinder)->gasmix;
 
@@ -886,7 +899,7 @@ bool plan(struct deco_state *ds, struct diveplan *diveplan, struct dive *dive, i
 		last_ascend_rate = ascent_velocity(depth, avg_depth, bottom_time);
 		/* Always prefer the best_first_ascend_cylinder if it has the right gasmix.
 		 * Otherwise take first cylinder from list with rightgasmix  */
-		if (same_gasmix(gas, get_cylinder(dive, best_first_ascend_cylinder)->gasmix))
+		if (best_first_ascend_cylinder != -1 && same_gasmix(gas, get_cylinder(dive, best_first_ascend_cylinder)->gasmix))
 			current_cylinder = best_first_ascend_cylinder;
 		else
 			current_cylinder = get_gasidx(dive, gas);
@@ -1032,7 +1045,7 @@ bool plan(struct deco_state *ds, struct diveplan *diveplan, struct dive *dive, i
 					 * backgas.  This could be customized if there were demand.
 					 */
 					if (break_cylinder == -1) {
-						if (get_o2(get_cylinder(dive, best_first_ascend_cylinder)->gasmix) <= 320)
+						if (best_first_ascend_cylinder != -1 && get_o2(get_cylinder(dive, best_first_ascend_cylinder)->gasmix) <= 320)
 							break_cylinder = best_first_ascend_cylinder;
 						else
 							break_cylinder = 0;
@@ -1087,7 +1100,7 @@ bool plan(struct deco_state *ds, struct diveplan *diveplan, struct dive *dive, i
 		 * otherwise odd things can happen, such as CVA causing the final ascent to start *later*
 		 * if the ascent rate is slower, which is completely nonsensical.
 		 * Assume final ascent takes 20s, which is the time taken to ascend at 9m/min from 3m */
-		ds->deco_time = clock - bottom_time - stoplevels[stopidx + 1] / last_ascend_rate + 20;
+		ds->deco_time = clock - bottom_time - (M_OR_FT(3,10) * ( prefs.last_stop ? 2 : 1)) / last_ascend_rate + 20;
 	} while (!is_final_plan);
 	decostoptable[decostopcounter].depth = 0;
 
@@ -1117,25 +1130,36 @@ bool plan(struct deco_state *ds, struct diveplan *diveplan, struct dive *dive, i
 }
 
 /*
- * Get a value in tenths (so "10.2" == 102, "9" = 90)
+ * Get a value with a given number of decimals:
+ * - get_decimals("10.2", &"10.2", 1) == 102
+ * - get_decimals("9", &"9", 1) = 90
+ * - get_decimals("1.35", &"1.35", 2) == 135))
  *
  * Return negative for errors.
  */
-static int get_tenths(const char *begin, const char **endp)
+static int get_decimals(const char *begin, const char **endp, const unsigned decimals)
 {
 	char *end;
 	int value = strtol(begin, &end, 10);
 
 	if (begin == end)
 		return -1;
-	value *= 10;
 
 	/* Fraction? We only look at the first digit */
 	if (*end == '.') {
-		end++;
-		if (!isdigit(*end))
-			return -1;
-		value += *end - '0';
+		unsigned fraction = 0;
+		for (unsigned i = 0; i < decimals; i++) {
+			value *= 10;
+
+			end++;
+
+			if (!isdigit(*end))
+				return -1;
+
+			fraction = 10 * fraction + (*end - '0');
+		}
+		value += fraction;
+
 		do {
 			end++;
 		} while (isdigit(*end));
@@ -1146,7 +1170,7 @@ static int get_tenths(const char *begin, const char **endp)
 
 static int get_permille(const char *begin, const char **end)
 {
-	int value = get_tenths(begin, end);
+	int value = get_decimals(begin, end, 1);
 	if (value >= 0) {
 		/* Allow a percentage sign */
 		if (**end == '%')
@@ -1209,18 +1233,15 @@ int validate_po2(const char *text, int *mbar_po2)
 	if (!text)
 		return 0;
 
-	po2 = get_tenths(text, &text);
+	po2 = get_decimals(text, &text, 2);
 	if (po2 < 0)
 		return 0;
-
-	while (isspace(*text))
-		text++;
 
 	while (isspace(*text))
 		text++;
 	if (*text)
 		return 0;
 
-	*mbar_po2 = po2 * 100;
+	*mbar_po2 = po2 * 10;
 	return 1;
 }

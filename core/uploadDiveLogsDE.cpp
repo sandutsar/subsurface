@@ -73,7 +73,7 @@ bool uploadDiveLogsDE::prepareDives(const QString &tempfile, bool selected)
 	xslt = get_stylesheet("divelogs-export.xslt");
 	if (!xslt) {
 		qDebug() << errPrefix << "missing stylesheet";
-		report_error(tr("Stylesheet to export to divelogs.de is not found").toUtf8());
+		report_error("%s", qPrintable(tr("Stylesheet to export to divelogs.de is not found")));
 		return false;
 	}
 
@@ -83,7 +83,7 @@ bool uploadDiveLogsDE::prepareDives(const QString &tempfile, bool selected)
 	if (!zip) {
 		char buffer[1024];
 		zip_error_to_str(buffer, sizeof buffer, error_code, errno);
-		report_error(tr("Failed to create zip file for upload: %s").toUtf8(), buffer);
+		report_error(qPrintable(tr("Failed to create zip file for upload: %s")), buffer);
 		return false;
 	}
 
@@ -144,7 +144,7 @@ bool uploadDiveLogsDE::prepareDives(const QString &tempfile, bool selected)
 		xmlDoc *doc = xmlReadMemory(mb.buffer, mb.len, "divelog", NULL, XML_PARSE_HUGE | XML_PARSE_RECOVER);
 		if (!doc) {
 			qWarning() << errPrefix << "could not parse back into memory the XML file we've just created!";
-			report_error(tr("internal error").toUtf8());
+			report_error("%s", qPrintable(tr("internal error")));
 			zip_close(zip);
 			QFile::remove(tempfile);
 			xsltFreeStylesheet(xslt);
@@ -152,12 +152,12 @@ bool uploadDiveLogsDE::prepareDives(const QString &tempfile, bool selected)
 			return false;
 		}
 
-		xml_params_add_int(params, "allcylinders", prefs.display_unused_tanks);
+		xml_params_add_int(params, "allcylinders", prefs.include_unused_tanks);
 		transformed = xsltApplyStylesheet(xslt, doc, xml_params_get(params));
 		free_xml_params(params);
 		if (!transformed) {
 			qWarning() << errPrefix << "XSLT transform failed for dive: " << i;
-			report_error(tr("Conversion of dive %1 to divelogs.de format failed").arg(i).toUtf8());
+			report_error("%s", qPrintable(tr("Conversion of dive %1 to divelogs.de format failed").arg(i)));
 			continue;
 		}
 		xmlDocDumpMemory(transformed, (xmlChar **)&membuf, &streamsize);
@@ -255,13 +255,20 @@ void uploadDiveLogsDE::uploadDives(const QString &filename, const QString &useri
 	reply = manager()->post(request, multipart);
 
 	// connect signals from upload process
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+	connect(reply, &QNetworkReply::finished, this, &uploadDiveLogsDE::uploadFinishedSlot);
+	connect(reply, &QNetworkReply::errorOccurred, this, &uploadDiveLogsDE::uploadErrorSlot);
+	connect(reply, &QNetworkReply::uploadProgress, this, &uploadDiveLogsDE::updateProgressSlot);
+	connect(&timeout, &QTimer::timeout, this, &uploadDiveLogsDE::uploadTimeoutSlot);
+#else
+
 	connect(reply, SIGNAL(finished()), this, SLOT(uploadFinishedSlot()));
 	connect(reply, SIGNAL(error(QNetworkReply::NetworkError)), this,
 		SLOT(uploadErrorSlot(QNetworkReply::NetworkError)));
 	connect(reply, SIGNAL(uploadProgress(qint64, qint64)), this,
 		SLOT(updateProgressSlot(qint64, qint64)));
 	connect(&timeout, SIGNAL(timeout()), this, SLOT(uploadTimeoutSlot()));
-
+#endif
 	timeout.start(30000); // 30s
 }
 
@@ -303,7 +310,7 @@ void uploadDiveLogsDE::uploadFinishedSlot()
 		if (parsed) {
 			if (strstr(resp, "<Login>succeeded</Login>")) {
 				if (strstr(resp, "<FileCopy>failed</FileCopy>")) {
-					report_error(tr("Upload failed").toUtf8());
+					report_error("%s", qPrintable(tr("Upload failed")));
 					return;
 				}
 				timeout.stop();
@@ -313,13 +320,13 @@ void uploadDiveLogsDE::uploadFinishedSlot()
 			}
 			timeout.stop();
 			err = tr("Login failed");
-			report_error(err.toUtf8());
+			report_error("%s", qPrintable(err));
 			emit uploadFinish(false, err);
 			return;
 		}
 		timeout.stop();
 		err = tr("Cannot parse response");
-		report_error(tr("Cannot parse response").toUtf8());
+		report_error("%s", qPrintable(tr("Cannot parse response")));
 		emit uploadFinish(false, err);
 	}
 }
@@ -334,7 +341,7 @@ void uploadDiveLogsDE::uploadTimeoutSlot()
 	}
 	cleanupTempFile();
 	QString err(tr("divelogs.de not responding"));
-	report_error(err.toUtf8());
+	report_error("%s", qPrintable(err));
 	emit uploadFinish(false, err);
 }
 
@@ -348,6 +355,6 @@ void uploadDiveLogsDE::uploadErrorSlot(QNetworkReply::NetworkError error)
 	}
 	cleanupTempFile();
 	QString err(tr("network error %1").arg(error));
-	report_error(err.toUtf8());
+	report_error("%s", qPrintable(err));
 	emit uploadFinish(false, err);
 }

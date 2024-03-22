@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "desktop-widgets/configuredivecomputerdialog.h"
 
+#include "core/device.h"
 #include "core/qthelper.h"
 #include "core/settings/qPrefDiveComputer.h"
 #include "desktop-widgets/mainwindow.h"
 // For fill_computer_list, descriptorLookup
 #include "core/downloadfromdcthread.h"
 
+#include <array>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QNetworkReply>
@@ -97,6 +99,24 @@ void GasTypeComboBoxItemDelegate::setModelData(QWidget *editor, QAbstractItemMod
 		QStyledItemDelegate::setModelData(editor, model, index);
 }
 
+struct DiveComputerEntry {
+	QString vendor;
+	QString product;
+	unsigned int transport;
+	bool fwUpgradePossible;
+	bool forcedFirmwareUpgradeSupported;
+};
+
+//WARNING: Do not edit this list or even just change its order without
+// making corresponding changes to the `DiveComputerList` element
+// in `configuredivecomputerdialog.ui` or this functionality will stop working.
+static const DiveComputerEntry supportedDiveComputers[] = {
+	{ "Heinrichs Weikamp", "OSTC 2N", DC_TRANSPORT_SERIAL, true, false },
+	{ "Heinrichs Weikamp", "OSTC Plus", DC_TRANSPORT_BLUETOOTH, true, false },
+	{ "Heinrichs Weikamp", "OSTC 4", DC_TRANSPORT_BLUETOOTH, true, true },
+	{ "Suunto", "Vyper", DC_TRANSPORT_SERIAL, false, false },
+};
+
 ConfigureDiveComputerDialog::ConfigureDiveComputerDialog(QWidget *parent) : QDialog(parent),
 	config(0),
 #ifdef BT_SUPPORT
@@ -123,18 +143,35 @@ ConfigureDiveComputerDialog::ConfigureDiveComputerDialog(QWidget *parent) : QDia
 	connect(ui.connectButton, &QPushButton::clicked, this, &ConfigureDiveComputerDialog::dc_open);
 	connect(ui.disconnectButton, &QPushButton::clicked, this, &ConfigureDiveComputerDialog::dc_close);
 #ifdef BT_SUPPORT
-	connect(ui.bluetoothMode, &QPushButton::clicked, this, &ConfigureDiveComputerDialog::selectRemoteBluetoothDevice);
+	connect(ui.connectBluetoothButton, &QPushButton::clicked, this, &ConfigureDiveComputerDialog::selectRemoteBluetoothDevice);
 #else
-	ui.bluetoothMode->setVisible(false);
+	ui.connectBluetoothButton->setVisible(false);
 #endif
 
 	memset(&device_data, 0, sizeof(device_data));
 	fill_computer_list();
-	if (!qPrefDiveComputer::device().isEmpty())
-		ui.device->setEditText(qPrefDiveComputer::device());
 
-	ui.DiveComputerList->setCurrentRow(0);
-	on_DiveComputerList_currentRowChanged(0);
+	unsigned int selectedDiveComputerIndex = 0;
+	const auto it = std::find_if(std::begin(supportedDiveComputers), std::end(supportedDiveComputers), [](const DiveComputerEntry &entry) {
+		return entry.vendor == qPrefDiveComputer::vendor() && entry.product == qPrefDiveComputer::product();
+	});
+	if (it != std::end(supportedDiveComputers)) {
+		selectedDiveComputerIndex = it - std::begin(supportedDiveComputers);
+	}
+
+	ui.DiveComputerList->setCurrentRow(selectedDiveComputerIndex);
+	on_DiveComputerList_currentRowChanged(selectedDiveComputerIndex);
+
+	QString deviceText = qPrefDiveComputer::device();
+	if (!deviceText.isEmpty()) {
+#if defined(BT_SUPPORT)
+		if (isBluetoothAddress(deviceText)) {
+			deviceText = BtDeviceSelectionDialog::formatDeviceText(deviceText, qPrefDiveComputer::device_name());
+		}
+#endif
+
+		ui.device->setEditText(deviceText);
+	}
 
 	ui.ostc3GasTable->setItemDelegateForColumn(1, new GasSpinBoxItemDelegate(this, GasSpinBoxItemDelegate::PERCENT));
 	ui.ostc3GasTable->setItemDelegateForColumn(2, new GasSpinBoxItemDelegate(this, GasSpinBoxItemDelegate::PERCENT));
@@ -230,7 +267,7 @@ ConfigureDiveComputerDialog::ConfigureDiveComputerDialog(QWidget *parent) : QDia
 	settings.endGroup();
 }
 
-OstcFirmwareCheck::OstcFirmwareCheck(QString product) : parent(0)
+OstcFirmwareCheck::OstcFirmwareCheck(const QString &product) : parent(0)
 {
 	QUrl url;
 	memset(&devData, 1, sizeof(devData));
@@ -264,7 +301,7 @@ void OstcFirmwareCheck::checkLatest(QWidget *_parent, device_data_t *data)
 {
 	devData = *data;
 	parent = _parent;
-	// If we didn't find a current firmware version stop this hole thing here.
+	// If we didn't find a current firmware version stop this whole thing here.
 	if (latestFirmwareAvailable.isEmpty())
 		return;
 
@@ -274,7 +311,7 @@ void OstcFirmwareCheck::checkLatest(QWidget *_parent, device_data_t *data)
 
 	int firmwareOnDevice = devData.devinfo.firmware;
 	QString firmwareOnDeviceString;
-	// Convert the latestFirmwareAvailable to a integear we can compare with
+	// Convert the latestFirmwareAvailable to a integer we can compare with
 	QStringList fwParts = latestFirmwareAvailable.split(".");
 	int latestFirmwareAvailableNumber;
 
@@ -293,7 +330,7 @@ void OstcFirmwareCheck::checkLatest(QWidget *_parent, device_data_t *data)
 
 	if (latestFirmwareAvailableNumber > firmwareOnDevice) {
 		QMessageBox response(parent);
-		QString message = tr("You should update the firmware on your dive computer: you have version %1 but the latest stable version is %2")
+		QString message = tr("A firmware update for your dive computer is available: you have version %1 but the latest stable version is %2.\nNot using the latest available stable firmware version on your dive computer means that Subsurface may not work correctly with it.")
 					  .arg(firmwareOnDeviceString)
 					  .arg(latestFirmwareAvailable);
 		message += tr("\n\nIf your device uses Bluetooth, do the same preparations as for a logbook download before continuing with the update");
@@ -346,7 +383,7 @@ void OstcFirmwareCheck::saveOstcFirmware(QNetworkReply *reply)
 	connect(config, &ConfigureDiveComputer::error, dialog, &QProgressDialog::setLabelText);
 	connect(config, &ConfigureDiveComputer::progress, dialog, &QProgressDialog::setValue);
 	config->dc_open(&devData);
-	config->startFirmwareUpdate(storeFirmware, &devData);
+	config->startFirmwareUpdate(storeFirmware, &devData, false);
 }
 
 ConfigureDiveComputerDialog::~ConfigureDiveComputerDialog()
@@ -398,10 +435,13 @@ static void fillDeviceList(const char *name, void *data)
 void ConfigureDiveComputerDialog::fill_device_list(unsigned int transport)
 {
 	int deviceIndex;
+	QString device = ui.device->currentText();
 	ui.device->clear();
 	deviceIndex = enumerate_devices(fillDeviceList, ui.device, transport);
 	if (deviceIndex >= 0)
 		ui.device->setCurrentIndex(deviceIndex);
+	else
+		ui.device->setCurrentText(device);
 }
 
 void ConfigureDiveComputerDialog::populateDeviceDetails()
@@ -869,6 +909,7 @@ void ConfigureDiveComputerDialog::readSettings()
 	ui.progressBar->setTextVisible(true);
 	// Fw update is no longer a option, needs to be done on a untouched device
 	ui.updateFirmwareButton->setEnabled(false);
+	ui.forceUpdateFirmware->setEnabled(false);
 
 	config->readSettings(&device_data);
 }
@@ -894,29 +935,33 @@ void ConfigureDiveComputerDialog::configError(QString err)
 
 void ConfigureDiveComputerDialog::getDeviceData()
 {
-#ifdef BT_SUPPORT
-	QString device = ui.bluetoothMode && btDeviceSelectionDialog ?
-				 btDeviceSelectionDialog->getSelectedDeviceAddress() :
-				 ui.device->currentText();
-#else
 	QString device = ui.device->currentText();
+#ifdef BT_SUPPORT
+	if (isBluetoothAddress(device)) {
+		QString name;
+		device = copy_qstring(extractBluetoothNameAddress(device, name));
+		device_data.btname = copy_qstring(name);
+		device_data.bluetooth_mode = true;
+	} else
 #endif
+	{
+		device_data.bluetooth_mode = false;
+	}
 	device_data.devname = copy_qstring(device);
-	device_data.vendor = copy_qstring(selected_vendor);
-	device_data.product = copy_qstring(selected_product);
 
-	device_data.descriptor = descriptorLookup.value(selected_vendor.toLower() + selected_product.toLower());
+	const DiveComputerEntry selectedDiveComputer = supportedDiveComputers[ui.DiveComputerList->currentRow()];
+
+	QString vendor = selectedDiveComputer.vendor;
+	QString product = selectedDiveComputer.product;
+	device_data.vendor = copy_qstring(vendor);
+	device_data.product = copy_qstring(product);
+	device_data.descriptor = descriptorLookup.value(vendor.toLower() + product.toLower());
+
 	device_data.diveid = 0;
 	memset(&device_data.devinfo, 0, sizeof(device_data.devinfo));
-
-	qPrefDiveComputer::set_device(device_data.devname);
-#ifdef BT_SUPPORT
-	if (ui.bluetoothMode && btDeviceSelectionDialog)
-		qPrefDiveComputer::set_device_name(btDeviceSelectionDialog->getSelectedDeviceName());
-#endif
 }
 
-void ConfigureDiveComputerDialog::on_cancel_clicked()
+void ConfigureDiveComputerDialog::on_close_clicked()
 {
 	this->close();
 }
@@ -1387,6 +1432,7 @@ void ConfigureDiveComputerDialog::on_restoreBackupButton_clicked()
 	if (!restorePath.isEmpty()) {
 		// Fw update is no longer a option, needs to be done on a untouched device
 		ui.updateFirmwareButton->setEnabled(false);
+		ui.forceUpdateFirmware->setEnabled(false);
 		if (!config->restoreXMLBackup(restorePath, deviceDetails)) {
 			QMessageBox::critical(this, tr("XML restore error"),
 					      tr("An error occurred while restoring the backup file.\n%1")
@@ -1411,38 +1457,20 @@ void ConfigureDiveComputerDialog::on_updateFirmwareButton_clicked()
 		ui.progressBar->setFormat("%p%");
 		ui.progressBar->setTextVisible(true);
 
-		config->startFirmwareUpdate(firmwarePath, &device_data);
+		config->startFirmwareUpdate(firmwarePath, &device_data, ui.forceUpdateFirmware->isChecked());
 	}
 }
 
 
 void ConfigureDiveComputerDialog::on_DiveComputerList_currentRowChanged(int currentRow)
 {
-	switch (currentRow) {
-	case 0:
-		selected_vendor = "Heinrichs Weikamp";
-		selected_product = "OSTC 2N";
-		fw_upgrade_possible = true;
-		break;
-	case 1:
-		selected_vendor = "Heinrichs Weikamp";
-		selected_product = "OSTC Plus";
-		fw_upgrade_possible = true;
-		break;
-	case 2:
-		selected_vendor = "Heinrichs Weikamp";
-		selected_product = "OSTC 4";
-		fw_upgrade_possible = true;
-		break;
-	case 3:
-		selected_vendor = "Suunto";
-		selected_product = "Vyper";
-		fw_upgrade_possible = false;
-	default:
-		/* Not Supported */
-		return;
-	}
-	fill_device_list(DC_TRANSPORT_SERIAL);
+	unsigned int transport = supportedDiveComputers[currentRow].transport;
+	if (transport == DC_TRANSPORT_BLUETOOTH)
+		ui.connectBluetoothButton->setEnabled(true);
+	else
+		ui.connectBluetoothButton->setEnabled(false);
+
+	fill_device_list(transport);
 }
 
 void ConfigureDiveComputerDialog::checkLogFile(int state)
@@ -1482,10 +1510,9 @@ void ConfigureDiveComputerDialog::selectRemoteBluetoothDevice()
 void ConfigureDiveComputerDialog::bluetoothSelectionDialogIsFinished(int result)
 {
 	if (result == QDialog::Accepted) {
-		ui.device->setCurrentText(btDeviceSelectionDialog->getSelectedDeviceText());
-		device_data.bluetooth_mode = true;
-
+		ui.device->setEditText(btDeviceSelectionDialog->getSelectedDeviceText());
 		ui.progressBar->setFormat(tr("Connecting to device..."));
+
 		dc_open();
 	}
 }
@@ -1503,15 +1530,23 @@ void ConfigureDiveComputerDialog::dc_open()
 	ui.retrieveDetails->setEnabled(true);
 	ui.resetButton->setEnabled(true);
 	ui.resetButton_4->setEnabled(true);
-	ui.updateFirmwareButton->setEnabled(true);
 	ui.disconnectButton->setEnabled(true);
 	ui.restoreBackupButton->setEnabled(true);
 	ui.connectButton->setEnabled(false);
-	ui.bluetoothMode->setEnabled(false);
+	ui.connectBluetoothButton->setEnabled(false);
 	ui.DiveComputerList->setEnabled(false);
 	ui.logToFile->setEnabled(false);
-	ui.updateFirmwareButton->setEnabled(fw_upgrade_possible);
+
+	const DiveComputerEntry selectedDiveComputer = supportedDiveComputers[ui.DiveComputerList->currentRow()];
+	ui.updateFirmwareButton->setEnabled(selectedDiveComputer.fwUpgradePossible);
+	ui.forceUpdateFirmware->setEnabled(selectedDiveComputer.forcedFirmwareUpgradeSupported);
+
 	ui.progressBar->setFormat(tr("Connected to device"));
+
+	qPrefDiveComputer::set_device(device_data.devname);
+	qPrefDiveComputer::set_device_name(device_data.btname);
+	qPrefDiveComputer::set_vendor(device_data.vendor);
+	qPrefDiveComputer::set_product(device_data.product);
 }
 
 void ConfigureDiveComputerDialog::dc_close()
@@ -1521,16 +1556,16 @@ void ConfigureDiveComputerDialog::dc_close()
 	ui.retrieveDetails->setEnabled(false);
 	ui.resetButton->setEnabled(false);
 	ui.resetButton_4->setEnabled(false);
-	ui.updateFirmwareButton->setEnabled(false);
 	ui.disconnectButton->setEnabled(false);
 	ui.connectButton->setEnabled(true);
-	ui.bluetoothMode->setEnabled(true);
+	ui.connectBluetoothButton->setEnabled(true);
 	ui.backupButton->setEnabled(false);
 	ui.saveSettingsPushButton->setEnabled(false);
 	ui.restoreBackupButton->setEnabled(false);
 	ui.DiveComputerList->setEnabled(true);
 	ui.logToFile->setEnabled(true);
 	ui.updateFirmwareButton->setEnabled(false);
+	ui.forceUpdateFirmware->setEnabled(false);
 	ui.progressBar->setFormat(tr("Disconnected from device"));
 	ui.progressBar->setValue(0);
 }

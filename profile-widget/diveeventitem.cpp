@@ -4,6 +4,7 @@
 #include "profile-widget/divepixmapcache.h"
 #include "profile-widget/animationfunctions.h"
 #include "core/event.h"
+#include "core/eventtype.h"
 #include "core/format.h"
 #include "core/profile.h"
 #include "core/gettextfromc.h"
@@ -46,6 +47,7 @@ struct event *DiveEventItem::getEventMutable()
 
 void DiveEventItem::setupPixmap(struct gasmix lastgasmix, const DivePixmaps &pixmaps)
 {
+	event_severity severity = get_event_severity(ev);
 	if (empty_string(ev->name)) {
 		setPixmap(pixmaps.warning);
 	} else if (same_string_caseinsensitive(ev->name, "modechange")) {
@@ -81,12 +83,8 @@ void DiveEventItem::setupPixmap(struct gasmix lastgasmix, const DivePixmaps &pix
 			else
 				setPixmap(pixmaps.gaschangeEAN);
 		}
-#ifdef SAMPLE_FLAGS_SEVERITY_SHIFT
 	} else if ((((ev->flags & SAMPLE_FLAGS_SEVERITY_MASK) >> SAMPLE_FLAGS_SEVERITY_SHIFT) == 1) ||
 		    // those are useless internals of the dive computer
-#else
-	} else if (
-#endif
 		   same_string_caseinsensitive(ev->name, "heading") ||
 		   (same_string_caseinsensitive(ev->name, "SP change") && ev->time.seconds == 0)) {
 		// 2 cases:
@@ -97,14 +95,12 @@ void DiveEventItem::setupPixmap(struct gasmix lastgasmix, const DivePixmaps &pix
 		// that allows tooltips to work when we don't want to show a specific
 		// pixmap for an event, but want to show the event value in the tooltip
 		setPixmap(pixmaps.transparent);
-#ifdef SAMPLE_FLAGS_SEVERITY_SHIFT
-	} else if (((ev->flags & SAMPLE_FLAGS_SEVERITY_MASK) >> SAMPLE_FLAGS_SEVERITY_SHIFT) == 2) {
+	} else if (severity == EVENT_SEVERITY_INFO) {
 		setPixmap(pixmaps.info);
-	} else if (((ev->flags & SAMPLE_FLAGS_SEVERITY_MASK) >> SAMPLE_FLAGS_SEVERITY_SHIFT) == 3) {
+	} else if (severity == EVENT_SEVERITY_WARN) {
 		setPixmap(pixmaps.warning);
-	} else if (((ev->flags & SAMPLE_FLAGS_SEVERITY_MASK) >> SAMPLE_FLAGS_SEVERITY_SHIFT) == 4) {
+	} else if (severity == EVENT_SEVERITY_ALARM) {
 		setPixmap(pixmaps.violation);
-#endif
 	} else if (same_string_caseinsensitive(ev->name, "violation") || // generic libdivecomputer
 		   same_string_caseinsensitive(ev->name, "Safety stop violation")  || // the rest are from the Uemis downloader
 		   same_string_caseinsensitive(ev->name, "pO₂ ascend alarm")  ||
@@ -170,7 +166,7 @@ void DiveEventItem::setupToolTipString(struct gasmix lastgasmix)
 		name += ev->flags & SAMPLE_FLAGS_BEGIN ? tr(" begin", "Starts with space!") :
 								    ev->flags & SAMPLE_FLAGS_END ? tr(" end", "Starts with space!") : "";
 	}
-	setToolTip(name);
+	setToolTip(QString("<img height=\"16\" src=\":status-warning-icon\">&nbsp;  ") + name);
 }
 
 void DiveEventItem::eventVisibilityChanged(const QString&, bool)
@@ -223,15 +219,6 @@ bool DiveEventItem::isInteresting(const struct dive *d, const struct divecompute
 	return true;
 }
 
-bool DiveEventItem::shouldBeHidden()
-{
-	for (int i = 0; i < evn_used; i++) {
-		if (!strcmp(ev->name, ev_namelist[i].ev_name) && ev_namelist[i].plot_ev == false)
-			return true;
-	}
-	return false;
-}
-
 void DiveEventItem::recalculatePos()
 {
 	if (!ev)
@@ -241,7 +228,7 @@ void DiveEventItem::recalculatePos()
 		hide();
 		return;
 	}
-	setVisible(!shouldBeHidden());
+	setVisible(!ev->hidden && !is_event_type_hidden(ev));
 	double x = hAxis->posAtValue(ev->time.seconds);
 	double y = vAxis->posAtValue(depth);
 	setPos(x, y);

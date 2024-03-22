@@ -17,6 +17,7 @@ CloudStorageAuthenticate::CloudStorageAuthenticate(QObject *parent) :
 #define CLOUDBACKENDSTORAGE CLOUDURL + "/storage"
 #define CLOUDBACKENDVERIFY CLOUDURL + "/verify"
 #define CLOUDBACKENDUPDATE CLOUDURL + "/update"
+#define CLOUDBACKENDDELETE CLOUDURL + "/delete-account"
 
 QNetworkReply* CloudStorageAuthenticate::backend(const QString& email,const QString& password,const QString& pin,const QString& newpasswd)
 {
@@ -37,11 +38,45 @@ QNetworkReply* CloudStorageAuthenticate::backend(const QString& email,const QStr
 	request->setRawHeader("User-Agent", userAgent.toUtf8());
 	request->setHeader(QNetworkRequest::ContentTypeHeader, "text/plain");
 	reply = manager()->post(*request, qPrintable(payload));
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+	connect(reply, &QNetworkReply::finished, this, &CloudStorageAuthenticate::uploadFinished);
+	connect(reply, &QNetworkReply::sslErrors, this, &CloudStorageAuthenticate::sslErrors);
+	connect(reply, &QNetworkReply::errorOccurred, this, &CloudStorageAuthenticate::uploadError);
+#else
 	connect(reply, SIGNAL(finished()), this, SLOT(uploadFinished()));
 	connect(reply, SIGNAL(sslErrors(QList<QSslError>)), this, SLOT(sslErrors(QList<QSslError>)));
 	connect(reply, SIGNAL(error(QNetworkReply::NetworkError)), this,
 		SLOT(uploadError(QNetworkReply::NetworkError)));
+#endif
 	return reply;
+}
+
+QNetworkReply* CloudStorageAuthenticate::deleteAccount(const QString& email, const QString& password)
+{
+	QString payload(email + QChar(' ') + password);
+	QNetworkRequest *request = new QNetworkRequest(QUrl(CLOUDBACKENDDELETE));
+	request->setRawHeader("Accept", "text/xml, text/plain");
+	request->setRawHeader("User-Agent", userAgent.toUtf8());
+	request->setHeader(QNetworkRequest::ContentTypeHeader, "text/plain");
+	reply = manager()->post(*request, qPrintable(payload));
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+	connect(reply, &QNetworkReply::finished, this, &CloudStorageAuthenticate::deleteFinished);
+	connect(reply, &QNetworkReply::sslErrors, this, &CloudStorageAuthenticate::sslErrors);
+	connect(reply, &QNetworkReply::errorOccurred, this, &CloudStorageAuthenticate::uploadError);
+#else
+	connect(reply, SIGNAL(finished()), this, SLOT(deleteFinished()));
+	connect(reply, SIGNAL(sslErrors(QList<QSslError>)), this, SLOT(sslErrors(QList<QSslError>)));
+	connect(reply, SIGNAL(error(QNetworkReply::NetworkError)), this,
+		SLOT(uploadError(QNetworkReply::NetworkError)));
+#endif
+	return reply;
+}
+
+void CloudStorageAuthenticate::deleteFinished()
+{
+	QString cloudAuthReply(reply->readAll());
+	qDebug() << "Completed connection with cloud storage backend, response" << cloudAuthReply;
+	emit finishedDelete();
 }
 
 void CloudStorageAuthenticate::uploadFinished()
@@ -62,7 +97,7 @@ void CloudStorageAuthenticate::uploadFinished()
 	} else if (cloudAuthReply == QLatin1String("[VERIFY]") ||
 		   cloudAuthReply == QLatin1String("Invalid PIN")) {
 		qPrefCloudStorage::set_cloud_verification_status(qPrefCloudStorage::CS_NEED_TO_VERIFY);
-		report_error(qPrintable(tr("Cloud account verification required, enter PIN in preferences")));
+		report_error("%s", qPrintable(tr("Cloud account verification required, enter PIN in preferences")));
 	} else if (cloudAuthReply == QLatin1String("[PASSWDCHANGED]")) {
 		qPrefCloudStorage::set_cloud_storage_password(cloudNewPassword);
 		cloudNewPassword.clear();

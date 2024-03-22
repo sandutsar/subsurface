@@ -2,10 +2,12 @@
 #ifndef QMLINTERFACE_H
 #define QMLINTERFACE_H
 #include "core/qthelper.h"
+#include "core/downloadfromdcthread.h"
 #include "core/settings/qPrefCloudStorage.h"
 #include "core/settings/qPrefUnit.h"
 #include "core/settings/qPrefDivePlanner.h"
 #include "core/settings/qPrefTechnicalDetails.h"
+#include "core/settings/qPrefDiveComputer.h"
 #include "qt-models/diveplannermodel.h"
 #include "backend-shared/plannershared.h"
 
@@ -52,8 +54,8 @@ class QMLInterface : public QObject {
 	Q_PROPERTY(DECO_MODE planner_deco_mode READ planner_deco_mode WRITE set_planner_deco_mode NOTIFY planner_deco_modeChanged);
 	Q_PROPERTY(int reserve_gas READ reserve_gas WRITE set_reserve_gas NOTIFY reserve_gasChanged);
 	Q_PROPERTY(bool safetystop READ safetystop WRITE set_safetystop NOTIFY safetystopChanged);
-	Q_PROPERTY(int gflow READ gflow WRITE set_gflow NOTIFY gflowChanged);
-	Q_PROPERTY(int gfhigh READ gfhigh WRITE set_gfhigh NOTIFY gfhighChanged);
+	Q_PROPERTY(int planner_gflow READ planner_gflow WRITE set_planner_gflow NOTIFY planner_gflowChanged);
+	Q_PROPERTY(int planner_gfhigh READ planner_gfhigh WRITE set_planner_gfhigh NOTIFY planner_gfhighChanged);
 	Q_PROPERTY(int vpmb_conservatism READ vpmb_conservatism WRITE set_vpmb_conservatism NOTIFY vpmb_conservatismChanged);
 	Q_PROPERTY(bool dobailout READ dobailout WRITE set_dobailout NOTIFY dobailoutChanged);
 	Q_PROPERTY(bool drop_stone_mode READ drop_stone_mode WRITE set_drop_stone_mode NOTIFY drop_stone_modeChanged);
@@ -77,6 +79,8 @@ class QMLInterface : public QObject {
 	Q_PROPERTY(bool display_transitions READ display_transitions WRITE set_display_transitions NOTIFY display_transitionsChanged);
 	Q_PROPERTY(bool verbatim_plan READ verbatim_plan WRITE set_verbatim_plan NOTIFY verbatim_planChanged);
 	Q_PROPERTY(bool display_variations READ display_variations WRITE set_display_variations NOTIFY display_variationsChanged);
+
+	Q_PROPERTY(bool sync_dc_time READ sync_dc_time WRITE set_sync_dc_time NOTIFY sync_dc_timeChanged);
 
 public:
 	// function to do the needed setup
@@ -186,8 +190,8 @@ public:
 	DECO_MODE planner_deco_mode() { return (DECO_MODE)PlannerShared::planner_deco_mode(); }
 	int reserve_gas() { return PlannerShared::reserve_gas(); }
 	bool safetystop() { return prefs.safetystop; }
-	int gflow() { return prefs.gflow; }
-	int gfhigh() { return prefs.gfhigh; }
+	int planner_gflow() { return DivePlannerPointsModel::instance()->gfLow(); }
+	int planner_gfhigh() { return DivePlannerPointsModel::instance()->gfHigh(); }
 	int vpmb_conservatism() { return prefs.vpmb_conservatism; }
 	bool dobailout() { return PlannerShared::dobailout(); }
 	bool drop_stone_mode() { return prefs.drop_stone_mode; }
@@ -212,6 +216,8 @@ public:
 	bool verbatim_plan() { return prefs.verbatim_plan; }
 	bool display_variations() { return prefs.display_variations; }
 
+	bool sync_dc_time() { return prefs.sync_dc_time; }
+
 public slots:
 	void set_cloud_verification_status(CLOUD_STATUS value) {  qPrefCloudStorage::set_cloud_verification_status(value); }
 	void set_duration_units(DURATION value) { qPrefUnits::set_duration_units((units::DURATION)value); }
@@ -233,8 +239,8 @@ public slots:
 	void set_planner_deco_mode(DECO_MODE value) { PlannerShared::set_planner_deco_mode((deco_mode)value); }
 	void set_reserve_gas(int value) { PlannerShared::set_reserve_gas(value); }
 	void set_safetystop(bool value) { DivePlannerPointsModel::instance()->setSafetyStop(value); }
-	void set_gflow(int value) { DivePlannerPointsModel::instance()->setGFLow(value); }
-	void set_gfhigh(int value) { DivePlannerPointsModel::instance()->setGFHigh(value); }
+	void set_planner_gflow(int value) { DivePlannerPointsModel::instance()->setGFLow(value); }
+	void set_planner_gfhigh(int value) { DivePlannerPointsModel::instance()->setGFHigh(value); }
 	void set_vpmb_conservatism(int value) { DivePlannerPointsModel::instance()->setVpmbConservatism(value); }
 	void set_dobailout(bool value) { PlannerShared::set_dobailout(value); }
 	void set_drop_stone_mode(bool value) { DivePlannerPointsModel::instance()->setDropStoneMode(value); }
@@ -258,6 +264,10 @@ public slots:
 	void set_display_transitions(bool value) { DivePlannerPointsModel::instance()->setDisplayTransitions(value); }
 	void set_verbatim_plan(bool value) { DivePlannerPointsModel::instance()->setVerbatim(value); }
 	void set_display_variations(bool value) { DivePlannerPointsModel::instance()->setDisplayVariations(value); }
+	void set_sync_dc_time(bool value) {
+		qPrefDiveComputer::set_sync_dc_time(value);
+		DCDeviceData::instance()->setSyncTime(value);
+	}
 	QString firstDiveDate() { return get_first_dive_date_string(); }
 	QString lastDiveDate() { return get_last_dive_date_string(); }
 
@@ -282,8 +292,8 @@ signals:
 	void planner_deco_modeChanged(DECO_MODE value);
 	void reserve_gasChanged(int value);
 	void safetystopChanged(bool value);
-	void gflowChanged(int value);
-	void gfhighChanged(int value);
+	void planner_gflowChanged(int value);
+	void planner_gfhighChanged(int value);
 	void vpmb_conservatismChanged(int value);
 	void dobailoutChanged(bool value);
 	void drop_stone_modeChanged(bool value);
@@ -307,6 +317,8 @@ signals:
 	void display_transitionsChanged(bool value);
 	void verbatim_planChanged(bool value);
 	void display_variationsChanged(bool value);
+
+	void sync_dc_timeChanged(bool value);
 private:
 	QMLInterface();
 };

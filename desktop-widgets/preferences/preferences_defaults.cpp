@@ -28,6 +28,12 @@ void PreferencesDefaults::refreshSettings()
 	ui->fontsize->setValue(qPrefDisplay::font_size());
 	ui->velocitySlider->setValue(qPrefDisplay::animation_speed());
 
+	if (qPrefDisplay::three_m_based_grid())
+		ui->grid3MBased->setChecked(true);
+	else
+		ui->gridGeneric->setChecked(true);
+
+	ui->checkBox_map_short_names->setChecked(qPrefDisplay::map_short_names());
 }
 
 void PreferencesDefaults::syncSettings()
@@ -35,4 +41,6 @@ void PreferencesDefaults::syncSettings()
 	qPrefDisplay::set_divelist_font(ui->font->currentFont().toString());
 	qPrefDisplay::set_font_size(ui->fontsize->value());
 	qPrefDisplay::set_animation_speed(ui->velocitySlider->value());
+	qPrefDisplay::set_three_m_based_grid(ui->grid3MBased->isChecked());
+	qPrefDisplay::set_map_short_names(ui->checkBox_map_short_names->isChecked());
 }

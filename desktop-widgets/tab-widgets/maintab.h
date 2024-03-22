@@ -21,10 +21,16 @@ public:
 	void clearTabs();
 	void nextInputField(QKeyEvent *event);
 	void stealFocus();
+	bool includesCurrentDive(const QVector<dive *> &dives) const;
+	divecomputer *getCurrentDC() const;
 
+	dive *currentDive;
+	int currentDC;
 public
 slots:
-	void updateDiveInfo();
+	// Always called with non-null currentDive
+	void updateDiveInfo(const std::vector<dive *> &selection, dive *currentDive, int currentDC);
+	void settingsChanged();
 	void escDetected();
 	void colorsChanged();
 private:

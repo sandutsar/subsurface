@@ -442,7 +442,6 @@ struct event *add_event(struct divecomputer *dc, unsigned int time, int type, in
 
 	add_event_to_dc(dc, ev);
 
-	remember_event(name);
 	return ev;
 }
 
@@ -547,4 +546,17 @@ void free_dc(struct divecomputer *dc)
 {
 	free_dc_contents(dc);
 	free(dc);
+}
+
+static const char *manual_dc_name = "manually added dive";
+bool is_manually_added_dc(const struct divecomputer *dc)
+{
+	return dc && dc->samples <= 50 &&
+	       same_string(dc->model, manual_dc_name);
+}
+
+void make_manually_added_dc(struct divecomputer *dc)
+{
+	free((void *)dc->model);
+	dc->model = strdup(manual_dc_name);
 }

@@ -10,6 +10,7 @@
 #include "picture.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -110,12 +111,6 @@ extern int mbar_to_depth(int mbar, const struct dive *dive);
 extern depth_t gas_mod(struct gasmix mix, pressure_t po2_limit, const struct dive *dive, int roundto);
 extern depth_t gas_mnd(struct gasmix mix, depth_t end, const struct dive *dive, int roundto);
 
-extern bool autogroup;
-
-extern struct dive displayed_dive;
-extern unsigned int dc_number;
-extern struct dive *current_dive;
-
 extern struct dive *get_dive(int nr);
 extern struct dive *get_dive_from_table(int nr, const struct dive_table *dt);
 extern struct dive_site *get_dive_site_for_dive(const struct dive *dive);
@@ -125,6 +120,8 @@ extern unsigned int number_of_computers(const struct dive *dive);
 extern struct divecomputer *get_dive_dc(struct dive *dive, int nr);
 extern const struct divecomputer *get_dive_dc_const(const struct dive *dive, int nr);
 extern timestamp_t dive_endtime(const struct dive *dive);
+
+extern void set_git_prefs(const char *prefs);
 
 extern struct dive *make_first_dc(const struct dive *d, int dc_number);
 extern struct dive *clone_delete_divecomputer(const struct dive *d, int dc_number);
@@ -142,6 +139,10 @@ void split_divecomputer(const struct dive *src, int num, struct dive **out1, str
 
 #define for_each_dc(_dive, _dc) \
 	for (_dc = &_dive->dc; _dc; _dc = _dc->next)
+
+#define for_each_relevant_dc(_dive, _dc) \
+	bool _all_planned = !has_planned(_dive, false); \
+	for (_dc = &_dive->dc; _dc; _dc = _dc->next) if (_all_planned || !is_dc_planner(_dc))
 
 extern struct dive *get_dive_by_uniq_id(int id);
 extern int get_idx_by_uniq_id(int id);
@@ -204,7 +205,6 @@ extern bool cylinder_with_sensor_sample(const struct dive *dive, int cylinder_id
 
 extern void invalidate_dive_cache(struct dive *dc);
 
-extern void set_autogroup(bool value);
 extern int total_weight(const struct dive *);
 
 extern const char *existing_filename;
@@ -220,7 +220,6 @@ extern struct gasmix get_gasmix(const struct dive *dive, const struct divecomput
 /* Get gasmix at a given time */
 extern struct gasmix get_gasmix_at_time(const struct dive *dive, const struct divecomputer *dc, duration_t time);
 
-extern char *get_dive_date_c_string(timestamp_t when);
 extern void update_setpoint_events(const struct dive *dive, struct divecomputer *dc);
 
 #ifdef __cplusplus

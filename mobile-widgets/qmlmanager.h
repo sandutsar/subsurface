@@ -19,6 +19,8 @@
 
 #if defined(Q_OS_ANDROID)
 #include "core/serial_usb_android.h"
+#elif defined(Q_OS_IOS)
+#include "ios/ios-share.h"
 #endif
 
 class QAction;
@@ -56,7 +58,7 @@ class QMLManager : public QObject {
 	Q_PROPERTY(bool diveListProcessing MEMBER m_diveListProcessing  WRITE setDiveListProcessing NOTIFY diveListProcessingChanged)
 	Q_PROPERTY(bool initialized MEMBER m_initialized NOTIFY initializedChanged)
 	Q_PROPERTY(QString syncState READ getSyncState NOTIFY syncStateChanged)
-
+	Q_PROPERTY(QString passwordState READ getPasswordState NOTIFY passwordStateChanged)
 public:
 	QMLManager();
 	~QMLManager();
@@ -64,7 +66,6 @@ public:
 	enum export_types {
 		EX_DIVES_XML,
 		EX_DIVE_SITES_XML,
-		EX_UDDF,
 		EX_DIVELOGS_DE,
 		EX_DIVESHARE
 	};
@@ -73,7 +74,7 @@ public:
 	Q_INVOKABLE void exportToFile(export_types type, QString directory, bool anonymize);
 #endif
 	Q_INVOKABLE void exportToWEB(export_types type, QString userId, QString password, bool anonymize);
-
+	Q_INVOKABLE void shareViaEmail(export_types type, bool anonymize);
 
 	QString DC_vendor() const;
 	void DC_setVendor(const QString& vendor);
@@ -161,6 +162,7 @@ public:
 	void rememberOldStatus();
 
 	QString getSyncState() const;
+	QString getPasswordState() const;
 
 public slots:
 	void appInitialized();
@@ -180,6 +182,7 @@ public slots:
 	void saveChangesCloud(bool forceRemoteSync, bool fromUndo = false);
 	void selectDive(int id);
 	void deleteDive(int id);
+	void deleteAccount();
 	void toggleDiveInvalid(int id);
 	void copyDiveData(int id);
 	void pasteDiveData(int id);
@@ -266,6 +269,9 @@ private:
 	QFile appLogFile;
 	bool appLogFileOpen;
 #endif
+#if defined(Q_OS_IOS)
+	IosShare iosshare;
+#endif
 	qPrefCloudStorage::cloud_status m_oldStatus;
 
 signals:
@@ -292,6 +298,7 @@ signals:
 	void redoTextChanged();
 	void restartDownloadSignal();
 	void syncStateChanged();
+	void passwordStateChanged();
 
 	// From upload process
 	void uploadFinish(bool success, const QString &text);

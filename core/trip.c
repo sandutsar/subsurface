@@ -2,13 +2,12 @@
 
 #include "trip.h"
 #include "dive.h"
+#include "divelog.h"
 #include "subsurface-time.h"
 #include "subsurface-string.h"
 #include "selection.h"
 #include "table.h"
-#include "core/qthelper.h"
-
-struct trip_table trip_table;
+#include "core/errorhelper.h"
 
 #ifdef DEBUG_TRIP
 void dump_trip_list(void)
@@ -17,9 +16,9 @@ void dump_trip_list(void)
 	int i = 0;
 	timestamp_t last_time = 0;
 
-	for (i = 0; i < trip_table.nr; ++i) {
+	for (i = 0; i < divelog.trips->nr; ++i) {
 		struct tm tm;
-		trip = trip_table.trips[i];
+		trip = divelog.trips->trips[i];
 		utc_mkdate(trip_date(trip), &tm);
 		if (trip_date(trip) < last_time)
 			printf("\n\ntrip_table OUT OF ORDER!!!\n\n\n");
@@ -54,6 +53,7 @@ static MAKE_REMOVE_FROM(trip_table, trips)
 MAKE_SORT(trip_table, struct dive_trip *, trips, comp_trips)
 MAKE_REMOVE(trip_table, struct dive_trip *, trip)
 MAKE_CLEAR_TABLE(trip_table, trips, trip)
+MAKE_MOVE_TABLE(trip_table, trips)
 
 timestamp_t trip_date(const struct dive_trip *trip)
 {
@@ -92,7 +92,7 @@ void add_dive_to_trip(struct dive *dive, dive_trip_t *trip)
 	if (dive->divetrip == trip)
 		return;
 	if (dive->divetrip)
-		SSRF_INFO("Warning: adding dive to trip that has trip set\n");
+		report_info("Warning: adding dive to trip that has trip set\n");
 	insert_dive(&trip->dives, dive);
 	dive->divetrip = trip;
 }
@@ -203,9 +203,9 @@ dive_trip_t *get_trip_for_new_dive(struct dive *new_dive, bool *allocated)
 /* lookup of trip in main trip_table based on its id */
 dive_trip_t *get_trip_by_uniq_id(int tripId)
 {
-	for (int i = 0; i < trip_table.nr; i++) {
-		if (trip_table.trips[i]->id == tripId)
-			return trip_table.trips[i];
+	for (int i = 0; i < divelog.trips->nr; i++) {
+		if (divelog.trips->trips[i]->id == tripId)
+			return divelog.trips->trips[i];
 	}
 	return NULL;
 }
@@ -285,26 +285,6 @@ dive_trip_t *get_dives_to_autogroup(struct dive_table *table, int start, int *fr
 
 	/* Did not find anyhting - mark as end */
 	return NULL;
-}
-
-void deselect_dives_in_trip(struct dive_trip *trip)
-{
-	if (!trip)
-		return;
-	for (int i = 0; i < trip->dives.nr; ++i)
-		deselect_dive(trip->dives.dives[i]);
-}
-
-void select_dives_in_trip(struct dive_trip *trip)
-{
-	struct dive *dive;
-	if (!trip)
-		return;
-	for (int i = 0; i < trip->dives.nr; ++i) {
-		dive = trip->dives.dives[i];
-		if (!dive->hidden_by_filter)
-			select_dive(dive);
-	}
 }
 
 /* Out of two strings, copy the string that is not empty (if any). */

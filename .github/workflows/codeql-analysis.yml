@@ -29,7 +29,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         # We must fetch at least the immediate parents so that if this is
         # a pull request then we can checkout the head.
@@ -44,14 +44,14 @@ jobs:
         libqt5webkit5-dev libsqlite3-dev libssh2-1-dev libssl-dev libssl-dev \
         libtool libusb-1.0-0-dev libxml2-dev libxslt1-dev libzip-dev make \
         pkg-config qml-module-qtlocation qml-module-qtpositioning \
-        qml-module-qtquick2 qt5-default qt5-qmake qtchooser qtconnectivity5-dev \
+        qml-module-qtquick2 qt5-qmake qtchooser qtconnectivity5-dev \
         qtdeclarative5-dev qtdeclarative5-private-dev qtlocation5-dev \
         qtpositioning5-dev qtscript5-dev qttools5-dev qttools5-dev-tools \
         qtquickcontrols2-5-dev xvfb libbluetooth-dev libmtp-dev
 
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v1
+      uses: github/codeql-action/init@v2
       with:
         languages: ${{ matrix.language }}
         # If you wish to specify custom queries, you can do so here or in a config file.
@@ -60,9 +60,13 @@ jobs:
         # queries: ./path/to/local/query, your-org/your-repo/queries@main
 
     - name: Build
+      env:
+         SUBSURFACE_REPO_PATH: ${{ github.workspace }}
       run: |
         cd ..
+        git config --global --add safe.directory ${SUBSURFACE_REPO_PATH}
+        git config --global --add safe.directory ${SUBSURFACE_REPO_PATH}/libdivecomputer
         bash -e -x subsurface/scripts/build.sh -desktop -build-with-webkit
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v1
+      uses: github/codeql-action/analyze@v2

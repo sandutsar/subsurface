@@ -49,6 +49,7 @@ PLATFORM=$(uname)
 BTSUPPORT="ON"
 DEBUGRELEASE="Debug"
 SRC_DIR="subsurface"
+ARCHS=""
 
 # deal with all the command line arguments
 while [[ $# -gt 0 ]] ; do
@@ -70,11 +71,23 @@ while [[ $# -gt 0 ]] ; do
 			# use the same 3rd party set.
 			shift
 			SRC_DIR="$1"
-			;;			
+			;;
 		-build-deps)
 			# in order to build the dependencies on Mac for release builds (to deal with the macosx-version-min for those)
 			# call this script with -build-deps
 			BUILD_DEPS="1"
+			;;
+		-prep-only)
+			# use this script to build dependencies and set things up with default values, but don't actually run
+			# the build
+			PREP_ONLY="1"
+			;;
+		-fat-build)
+			# build a fat binary for macOS
+			# ignored on other platforms
+			# this implies a Qt6 build (as m1 isn't supported in Qt5)
+			ARCHS="arm64 x86_64"
+			BUILD_WITH_QT6="1"
 			;;
 		-build-prefix)
 			# instead of building in build & build-mobile in the current directory, build in <buildprefix>build
@@ -90,10 +103,23 @@ while [[ $# -gt 0 ]] ; do
 			# is still available on Linux distros)
 			BUILD_WITH_WEBKIT="1"
 			;;
+		-build-with-qt6)
+			# Qt6 is not enabled by default as there are a few issues still with the port
+			# - by default the Qt6 packages don't include QtLocation, so no maps (see below)
+			# - WebKit doesn't work with Qt6, so no printing or in-app user manual
+			# - there are a few other random bugs that we still find here and there
+			# So by default we only try to build against Qt5. This overwrites that
+			BUILD_WITH_QT6="1"
+			;;
+		-build-with-map)
+			# Qt6 doesn't include QtLocation (as of Qt 6.3) - but you can build / install it from source.
+			# use this flag to force building googlemaps with Qt6
+			BUILD_WITH_MAP="1"
+			;;
 		-mobile)
 			# we are building Subsurface-mobile
 			# Note that this will run natively on the host OS.
-			# To cross build for Android or iOS (including simulator) 
+			# To cross build for Android or iOS (including simulator)
 			# use the scripts in packaging/xxx
 			BUILD_MOBILE="1"
 			;;
@@ -116,6 +142,10 @@ while [[ $# -gt 0 ]] ; do
 			BUILD_DESKTOP="1"
 			BUILD_DOWNLOADER="1"
 			;;
+		-ftdi)
+			# make sure we include the user space FTDI drivers
+			FTDI="1"
+			;;
 		-create-appdir)
 			# we are building an AppImage as by product
 			CREATE_APPDIR="1"
@@ -126,7 +156,7 @@ while [[ $# -gt 0 ]] ; do
 			;;
 		*)
 			echo "Unknown command line argument $arg"
-			echo "Usage: build.sh [-no-bt] [-quick] [-build-deps] [-src-dir <SUBSURFACE directory>] [-build-prefix <PREFIX>] [-build-with-webkit] [-mobile] [-desktop] [-downloader] [-both] [-all] [-create-appdir] [-release]"
+			echo "Usage: build.sh [-all] [-both] [-build-deps] [-build-prefix <PREFIX>] [-build-with-map] [-build-with-qt6] [-build-with-webkit] [-create-appdir] [-desktop] [-downloader] [-fat-build] [-ftdi] [-mobile] [-no-bt] [-prep-only] [-quick] [-release] [-src-dir <SUBSURFACE directory>] "
 			exit 1
 			;;
 	esac
@@ -157,18 +187,24 @@ if [ "$PLATFORM" = Darwin ] ; then
 		exit 1;
 	fi
 	# find a 10.x base SDK to use, or if none can be found, find a numbered 11.x base SDK to use
-	BASESDK=$(ls $SDKROOT | grep "MacOSX10\.1.\.sdk" | head -1 | sed -e "s/MacOSX//;s/\.sdk//")
+	BASESDK=$(ls $SDKROOT | grep -E "MacOSX1[0-6]\.[0-9]+\.sdk" | head -1 | sed -e "s/MacOSX//;s/\.sdk//")
 	if [ -z "$BASESDK" ] ; then
-		BASESDK=$(ls $SDKROOT | grep -E "MacOSX11\.[0-9]+\.sdk" | head -1 | sed -e "s/MacOSX//;s/\.sdk//")
-		if [ -z "$BASESDK" ] ; then
-			echo "Cannot find a base SDK of type 10.x or 11.x under the SDK root of ${SDKROOT}"
-			exit 1;
-		fi
+		echo "Cannot find a base SDK of type 1[0-6].x under the SDK root of ${SDKROOT}"
+		exit 1;
 	fi
+	if [ "$ARCHS" != "" ] ; then
+		# we do assume that the two architectures mentioned are x86_64 and arm64 .. that's kinda wrong
+		MAC_CMAKE="-DCMAKE_OSX_DEPLOYMENT_TARGET=${BASESDK} -DCMAKE_OSX_SYSROOT=${SDKROOT}/MacOSX${BASESDK}.sdk/ -DCMAKE_OSX_ARCHITECTURES='x86_64;arm64'"
+		MAC_OPTS="-mmacosx-version-min=${BASESDK} -isysroot${SDKROOT}/MacOSX${BASESDK}.sdk -arch arm64 -arch x86_64"
+	else
+		MAC_CMAKE="-DCMAKE_OSX_DEPLOYMENT_TARGET=${BASESDK} -DCMAKE_OSX_SYSROOT=${SDKROOT}/MacOSX${BASESDK}.sdk/"
+		MAC_OPTS="-mmacosx-version-min=${BASESDK} -isysroot${SDKROOT}/MacOSX${BASESDK}.sdk"
+		ARCHS=$(uname -m) # crazy, I know, but $(arch) results in the incorrect 'i386' on an x86_64 Mac
+	fi
+	# OpenSSL can't deal with multi arch build
+	MAC_OPTS_OPENSSL="-mmacosx-version-min=${BASESDK} -isysroot${SDKROOT}/MacOSX${BASESDK}.sdk"
 	echo "Using ${BASESDK} as the BASESDK under ${SDKROOT}"
 
-	OLDER_MAC="-mmacosx-version-min=${BASESDK} -isysroot${SDKROOT}/MacOSX${BASESDK}.sdk"
-	OLDER_MAC_CMAKE="-DCMAKE_OSX_DEPLOYMENT_TARGET=${BASESDK} -DCMAKE_OSX_SYSROOT=${SDKROOT}/MacOSX${BASESDK}.sdk/"
 	if [[ ! -d /usr/include && ! -d "${SDKROOT}/MacOSX${BASESDK}.sdk/usr/include" ]] ; then
 		echo "Error: Xcode Command Line Tools are not installed"
 		echo ""
@@ -223,7 +259,9 @@ if [ -n "$CMAKE_PREFIX_PATH" ] ; then
 	QMAKE=$CMAKE_PREFIX_PATH/../../bin/qmake
 fi
 if [[ -z $QMAKE  ||  ! -x $QMAKE ]] ; then
-	hash qmake > /dev/null 2> /dev/null && QMAKE=qmake
+	[ -z $QMAKE ] && [ "$BUILD_WITH_QT6" = "1" ] && hash qmake6 > /dev/null 2> /dev/null && QMAKE=qmake6
+	[ -z $QMAKE ] && [ "$BUILD_WITH_QT6" = "1" ] && hash qmake-qt6 > /dev/null 2> /dev/null && QMAKE=qmake-qt6
+	[ -z $QMAKE ] && hash qmake > /dev/null 2> /dev/null && QMAKE=qmake
 	[ -z $QMAKE ] && hash qmake-qt5 > /dev/null 2> /dev/null && QMAKE=qmake-qt5
 	[ -z $QMAKE ] && hash qmake-qt6 > /dev/null 2> /dev/null && QMAKE=qmake-qt6
 	[ -z $QMAKE ] && echo "cannot find qmake, qmake-qt5, or qmake-qt6" && exit 1
@@ -264,7 +302,8 @@ if [ "$PLATFORM" = Linux ] && [[ $QT_VERSION == 5* ]] ; then
 		rm -rf "$INSTALL_ROOT"/include/QtLocation > /dev/null 2>&1
 		rm -rf "$INSTALL_ROOT"/include/QtPositioning > /dev/null 2>&1
 
-		git clone --branch "v$QT_VERSION" git://code.qt.io/qt/qtlocation.git --depth=1 $QTLOC_GIT
+		git clone --branch "v$QT_VERSION" https://code.qt.io/qt/qtlocation.git --depth=1 $QTLOC_GIT ||
+			git clone --branch "v$QT_VERSION-lts-lgpl" https://code.qt.io/qt/qtlocation.git --depth=1 $QTLOC_GIT
 
 		mkdir -p "$QTLOC_PRIVATE"
 		cd $QTLOC_GIT/src/location
@@ -330,7 +369,7 @@ if [[ $PLATFORM = Darwin && "$BUILD_DEPS" == "1" ]] ; then
 	sed -i .bak 's/share\/pkgconfig/pkgconfig/' CMakeLists.txt
 	mkdir -p build
 	cd build
-	cmake "$OLDER_MAC_CMAKE" -DCMAKE_BUILD_TYPE="$DEBUGRELEASE" \
+	cmake $MAC_CMAKE -DCMAKE_BUILD_TYPE="$DEBUGRELEASE" \
 		-DCMAKE_INSTALL_PREFIX="$INSTALL_ROOT" \
 		..
 	make -j4
@@ -342,29 +381,46 @@ if [[ $PLATFORM = Darwin && "$BUILD_DEPS" == "1" ]] ; then
 	bash ./buildconf
 	mkdir -p build
 	cd build
-	CFLAGS="$OLDER_MAC" ../configure --prefix="$INSTALL_ROOT" --with-darwinssl \
+	CFLAGS="$MAC_OPTS" ../configure --prefix="$INSTALL_ROOT" --with-darwinssl \
 		--disable-tftp --disable-ftp --disable-ldap --disable-ldaps --disable-imap --disable-pop3 --disable-smtp --disable-gopher --disable-smb --disable-rtsp
 	make -j4
 	make install
 	popd
 
+	# openssl doesn't support fat binaries out of the box
+	# this tries to hack around this by first doing an install for x86_64, then a build for arm64
+	# and then manually creating fat libraries from that
+	# I worry if there are issues with using the arm or x86 include files...???
 	./${SRC_DIR}/scripts/get-dep-lib.sh single . openssl
 	pushd openssl
-	mkdir -p build
-	cd build
-	if [ $(arch) == "arm64" ] ; then OS_ARCH=darwin64-arm64-cc ; else OS_ARCH=darwin64-x86_64-cc; fi
-	../Configure --prefix="$INSTALL_ROOT" --openssldir="$INSTALL_ROOT" "$OLDER_MAC" $OS_ARCH
-	make depend
-	# all the tests fail because the assume that openssl is already installed. Odd? Still thinks work
-	make -j4 -k
-	make -k install
+	for ARCH in $ARCHS; do
+		mkdir -p build-$ARCH
+		cd build-$ARCH
+		OS_ARCH=darwin64-$ARCH-cc
+		../Configure --prefix="$INSTALL_ROOT" --openssldir="$INSTALL_ROOT" "$MAC_OPTS_OPENSSL" $OS_ARCH
+		make depend
+		# all the tests fail because the assume that openssl is already installed. Odd? Still things work
+		make -j4 -k
+		make -k install
+		cd ..
+	done
+	if [[ $ARCHS == *" "* ]] ; then
+		# now manually add the binaries together and overwrite them in the INSTALL_ROOT
+		cd build-arm64
+		lipo -create ./libcrypto.a ../build-x86_64/libcrypto.a -output "$INSTALL_ROOT"/lib/libcrypto.a
+		lipo -create ./libssl.a ../build-x86_64/libssl.a -output "$INSTALL_ROOT"/lib/libssl.a
+		LIBSSLNAME=$(readlink libssl.dylib)
+		lipo -create ./$LIBSSLNAME ../build-x86_64/$LIBSSLNAME -output "$INSTALL_ROOT"/lib/$LIBSSLNAME
+		LIBCRYPTONAME=$(readlink libcrypto.dylib)
+		lipo -create ./$LIBCRYPTONAME ../build-x86_64/$LIBCRYPTONAME -output "$INSTALL_ROOT"/lib/$LIBCRYPTONAME
+	fi
 	popd
 
 	./${SRC_DIR}/scripts/get-dep-lib.sh single . libssh2
 	pushd libssh2
 	mkdir -p build
 	cd build
-	cmake "$OLDER_MAC_CMAKE" -DCMAKE_INSTALL_PREFIX="$INSTALL_ROOT" -DCMAKE_BUILD_TYPE=$DEBUGRELEASE -DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF ..
+	cmake $MAC_CMAKE -DCMAKE_INSTALL_PREFIX="$INSTALL_ROOT" -DCMAKE_BUILD_TYPE=$DEBUGRELEASE -DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF ..
 	make -j4
 	make install
 	popd
@@ -387,7 +443,7 @@ if [[ "$LIBGITMAJ" -lt "1" && "$LIBGIT" -lt "26" ]] ; then
 	pushd libgit2
 	mkdir -p build
 	cd build
-	cmake "$OLDER_MAC_CMAKE" -DCMAKE_INSTALL_PREFIX="$INSTALL_ROOT" -DCMAKE_BUILD_TYPE="$DEBUGRELEASE" -DBUILD_CLAR=OFF ..
+	cmake $MAC_CMAKE -DCMAKE_INSTALL_PREFIX="$INSTALL_ROOT" -DCMAKE_BUILD_TYPE="$DEBUGRELEASE" -DBUILD_CLAR=OFF ..
 	make -j4
 	make install
 	popd
@@ -411,7 +467,7 @@ if [[ $PLATFORM = Darwin && "$BUILD_DEPS" == "1" ]] ; then
 	pushd libzip
 	mkdir -p build
 	cd build
-	cmake "$OLDER_MAC_CMAKE" -DCMAKE_BUILD_TYPE="$DEBUGRELEASE" \
+	cmake $MAC_CMAKE -DCMAKE_BUILD_TYPE="$DEBUGRELEASE" \
 		-DCMAKE_INSTALL_PREFIX="$INSTALL_ROOT" \
 		..
 	make -j4
@@ -424,7 +480,7 @@ if [[ $PLATFORM = Darwin && "$BUILD_DEPS" == "1" ]] ; then
 	bash ./bootstrap
 	mkdir -p build
 	cd build
-	CFLAGS="$OLDER_MAC" ../configure --prefix="$INSTALL_ROOT"
+	CFLAGS="$MAC_OPTS" ../configure --prefix="$INSTALL_ROOT"
 	make -j4
 	make install
 	popd
@@ -434,18 +490,16 @@ if [[ $PLATFORM = Darwin && "$BUILD_DEPS" == "1" ]] ; then
 	bash ./bootstrap.sh
 	mkdir -p build
 	cd build
-	CFLAGS="$OLDER_MAC" ../configure --prefix="$INSTALL_ROOT" --disable-examples
+	CFLAGS="$MAC_OPTS" ../configure --prefix="$INSTALL_ROOT" --disable-examples
 	make -j4
 	make install
 	popd
 
 	./${SRC_DIR}/scripts/get-dep-lib.sh single . libmtp
 	pushd libmtp
-	patch -p1 < ../${SRC_DIR}/scripts/libmtp.patch
+	patch -p1 < ../${SRC_DIR}/scripts/libmtp.patch || true
 	echo 'N' | NOCONFIGURE="1" bash ./autogen.sh
-	mkdir -p build
-	cd build
-	CFLAGS="$OLDER_MAC" ../configure --prefix="$INSTALL_ROOT"
+	CFLAGS="$MAC_OPTS" ./configure --prefix="$INSTALL_ROOT"
 	make -j4
 	make install
 	popd
@@ -454,7 +508,7 @@ if [[ $PLATFORM = Darwin && "$BUILD_DEPS" == "1" ]] ; then
 	pushd libftdi1
 	mkdir -p build
 	cd build
-	cmake "$OLDER_MAC_CMAKE" -DCMAKE_BUILD_TYPE="$DEBUGRELEASE" \
+	cmake $MAC_CMAKE -DCMAKE_BUILD_TYPE="$DEBUGRELEASE" \
 		-DCMAKE_INSTALL_PREFIX="$INSTALL_ROOT" \
 		..
 	make -j4
@@ -484,7 +538,7 @@ if [ ! -f "$SRC"/${SRC_DIR}/libdivecomputer/configure ] ; then
 	autoreconf --install "$SRC"/${SRC_DIR}/libdivecomputer
 	autoreconf --install "$SRC"/${SRC_DIR}/libdivecomputer
 fi
-CFLAGS="$OLDER_MAC -I$INSTALL_ROOT/include $LIBDC_CFLAGS" "$SRC"/${SRC_DIR}/libdivecomputer/configure --prefix="$INSTALL_ROOT" --disable-examples
+CFLAGS="$MAC_OPTS -I$INSTALL_ROOT/include $LIBDC_CFLAGS" "$SRC"/${SRC_DIR}/libdivecomputer/configure --prefix="$INSTALL_ROOT" --disable-examples
 if [ "$PLATFORM" = Darwin ] ; then
 	# remove some copmpiler options that aren't supported on Mac
 	# otherwise the log gets very noisy
@@ -510,7 +564,7 @@ STATIC_LIBDC="$INSTALL_ROOT/$(grep ^libdir Makefile | cut -d/ -f2)/libdivecomput
 
 cd "$SRC"
 
-if [ "$QUICK" != "1" ] && [ "$BUILD_DESKTOP$BUILD_MOBILE" != "" ] && [[ $QT_VERSION == 5* ]] ; then
+if [ "$QUICK" != "1" ] && [ "$BUILD_DESKTOP$BUILD_MOBILE" != "" ] && ( [[ $QT_VERSION == 5* ]] || [ "$BUILD_WITH_MAP" = "1" ] ); then
 	# build the googlemaps map plugin
 
 	cd "$SRC"
@@ -519,16 +573,30 @@ if [ "$QUICK" != "1" ] && [ "$BUILD_DESKTOP$BUILD_MOBILE" != "" ] && [[ $QT_VERS
 	mkdir -p build
 	mkdir -p J10build
 	cd build
-	$QMAKE "INCLUDEPATH=$INSTALL_ROOT/include" ../googlemaps.pro
-	# on Travis the compiler doesn't support c++1z, yet qmake adds that flag;
-	# since things compile fine with c++11, let's just hack that away
-	# similarly, don't use -Wdata-time
-	if [ "$TRAVIS" = "true" ] ; then
-		mv Makefile Makefile.bak
-		cat Makefile.bak | sed -e 's/std=c++1z/std=c++11/g ; s/-Wdate-time//' > Makefile
+	if [ "$PLATFORM" = Darwin ]  && [[ $QT_VERSION == 6* ]]; then
+		# since we are currently building QtLocation from source, we don't have a way to easily install
+		# the private headers... so this is a bit of a hack to get those for googlemaps...
+		# regardless of whether we do a fat build or not, let's do the 'native' build here
+		$QMAKE "INCLUDEPATH=$INSTALL_ROOT/../qtlocation/build/include/QtLocation/6.3.0" QMAKE_APPLE_DEVICE_ARCHS="$(uname -m)" ../googlemaps.pro
+	else
+		$QMAKE "INCLUDEPATH=$INSTALL_ROOT/include" ../googlemaps.pro
 	fi
 	make -j4
-	make install
+	if [ "$PLATFORM" = Darwin ]  && [[ $QT_VERSION == 6* ]] && [[ $ARCHS == *" "* ]] ; then
+		# we can't build fat binaries directly here, so let's do it in two steps
+		# above we build the 'native' binary, now build the other one
+		OTHERARCH=${ARCHS//$(uname -m)/}
+		OTHERARCH=${OTHERARCH// /}
+		mkdir -p ../build-$OTHERARCH
+		cd ../build-$OTHERARCH
+		$QMAKE "INCLUDEPATH=$INSTALL_ROOT/../qtlocation/build/include/QtLocation/6.3.0" QMAKE_APPLE_DEVICE_ARCHS=$OTHERARCH ../googlemaps.pro
+		make -j4
+		# now combine them into one .dylib
+		mkdir -p "$INSTALL_ROOT"/plugins/geoservices
+		lipo -create ./libqtgeoservices_googlemaps.dylib ../build/libqtgeoservices_googlemaps.dylib -output "$INSTALL_ROOT"/plugins/geoservices/libqtgeoservices_googlemaps.dylib
+	else
+		make install
+	fi
 	popd
 fi
 
@@ -545,6 +613,12 @@ for (( i=0 ; i < ${#BUILDS[@]} ; i++ )) ; do
 		EXTRA_OPTS="-DNO_USERMANUAL=OFF -DNO_PRINTING=OFF"
 	else
 		EXTRA_OPTS="-DNO_USERMANUAL=ON -DNO_PRINTING=ON"
+	fi
+	if [ "$FTDI" = "1" ] ; then
+		EXTRA_OPTSi="$EXTRA_OPTS -DFTDISUPPORT=ON"
+	fi
+	if [ "$BUILD_WITH_QT6" = "1" ] ; then
+		EXTRA_OPTS="$EXTRA_OPTS -DBUILD_WITH_QT6=ON"
 	fi
 
 	cd "$SRC"/${SRC_DIR}
@@ -576,17 +650,19 @@ for (( i=0 ; i < ${#BUILDS[@]} ; i++ )) ; do
 		rm -rf Subsurface-mobile.app
 	fi
 
-	LIBRARY_PATH=$INSTALL_ROOT/lib make -j4
-	LIBRARY_PATH=$INSTALL_ROOT/lib make install
+	if [ ! "$PREP_ONLY" = "1" ] ; then
+		LIBRARY_PATH=$INSTALL_ROOT/lib make -j4
+		LIBRARY_PATH=$INSTALL_ROOT/lib make install
 
-	if [ "$CREATE_APPDIR" = "1" ] ; then
-		# if we create an AppImage this makes gives us a sane starting point
-		cd "$SRC"
-		mkdir -p ./appdir
-		mkdir -p appdir/usr/share/metainfo
-		mkdir -p appdir/usr/share/icons/hicolor/256x256/apps
-		cp -r ./install-root/* ./appdir/usr
-		cp ${SRC_DIR}/appdata/subsurface.appdata.xml appdir/usr/share/metainfo/
-		cp ${SRC_DIR}/icons/subsurface-icon.png appdir/usr/share/icons/hicolor/256x256/apps/
+		if [ "$CREATE_APPDIR" = "1" ] ; then
+			# if we create an AppImage this makes gives us a sane starting point
+			cd "$SRC"
+			mkdir -p ./appdir
+			mkdir -p appdir/usr/share/metainfo
+			mkdir -p appdir/usr/share/icons/hicolor/256x256/apps
+			cp -r ./install-root/* ./appdir/usr
+			cp ${SRC_DIR}/metainfo/subsurface.metainfo.xml appdir/usr/share/metainfo/
+			cp ${SRC_DIR}/icons/subsurface-icon.png appdir/usr/share/icons/hicolor/256x256/apps/
+		fi
 	fi
 done

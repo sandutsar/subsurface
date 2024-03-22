@@ -227,15 +227,15 @@ TemplatePage {
 					leftPadding: Kirigami.Units.smallSpacing * 2
 				}
 				TemplateSpinBox {
-					from: 1
-					to: 99
+					from: 10
+					to: 150
 					stepSize: 1
-					value: Backend.gflow
+					value: Backend.planner_gflow
 					textFromValue: function (value, locale) {
 						return value + volumeUnit
 					}
 					onValueModified: {
-						Backend.gflow = value
+						Backend.planner_gflow = value
 					}
 				}
 
@@ -244,15 +244,15 @@ TemplatePage {
 					leftPadding: Kirigami.Units.smallSpacing * 2
 				}
 				TemplateSpinBox {
-					from: 1
-					to: 99
+					from: 10
+					to: 150
 					stepSize: 1
-					value: Backend.gfhigh
+					value: Backend.planner_gfhigh
 					textFromValue: function (value, locale) {
 						return value + volumeUnit
 					}
 					onValueModified: {
-						Backend.gfhigh = value
+						Backend.planner_gfhigh = value
 					}
 				}
 

@@ -6,6 +6,7 @@
 #include "ui_TabDiveEquipment.h"
 #include "qt-models/completionmodels.h"
 #include "desktop-widgets/divelistview.h"
+#include "desktop-widgets/modeldelegates.h"
 
 namespace Ui {
 	class TabDiveEquipment;
@@ -17,9 +18,9 @@ class CylindersModel;
 class TabDiveEquipment : public TabBase {
 	Q_OBJECT
 public:
-	TabDiveEquipment(QWidget *parent = 0);
+	TabDiveEquipment(MainTab *parent);
 	~TabDiveEquipment();
-	void updateData() override;
+	void updateData(const std::vector<dive *> &selection, dive *currentDive, int currentDC) override;
 	void clear() override;
 	void closeWarning();
 
@@ -38,6 +39,11 @@ private:
 	SuitCompletionModel suitModel;
 	CylindersModel *cylindersModel;
 	WeightModel *weightModel;
+
+	TankInfoDelegate tankInfoDelegate;
+	TankUseDelegate tankUseDelegate;
+	SensorDelegate sensorDelegate;
+	WSInfoDelegate wsInfoDelegate;
 };
 
 #endif // TAB_DIVE_EQUIPMENT_H

@@ -7,9 +7,6 @@
 
 TagWidget::TagWidget(QWidget *parent) : GroupedLineEdit(parent), m_completer(NULL), lastFinishedTag(false)
 {
-	connect(this, SIGNAL(cursorPositionChanged()), this, SLOT(reparse()));
-	connect(this, SIGNAL(textChanged()), this, SLOT(reparse()));
-
 	QColor textColor = palette().color(QPalette::Text);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 	float h, s, l, a;
@@ -39,8 +36,8 @@ void TagWidget::setCompleter(QCompleter *completer)
 {
 	m_completer = completer;
 	m_completer->setWidget(this);
-	connect(m_completer, SIGNAL(activated(QString)), this, SLOT(completionSelected(QString)));
-	connect(m_completer, SIGNAL(highlighted(QString)), this, SLOT(completionHighlighted(QString)));
+	connect(m_completer, QOverload<const QString &>::of(&QCompleter::activated), this, &TagWidget::completionSelected);
+	connect(m_completer, QOverload<const QString &>::of(&QCompleter::highlighted), this, &TagWidget::completionHighlighted);
 }
 
 #if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
@@ -92,6 +89,25 @@ void TagWidget::highlight()
 	}
 }
 
+void TagWidget::inputMethodEvent(QInputMethodEvent *e)
+{
+	GroupedLineEdit::inputMethodEvent(e);
+	if (!e->commitString().isEmpty())
+		reparse();
+}
+
+// Call complete on a QCompleter and set the WA_InputMethodEnabled on
+// the popup if a popup is opened. We need that flag, otherwise composition
+// events are not forwarded to the widget and the user cannot enter
+// multi-key characters as long as the popup is active.
+static void complete(QCompleter *completer)
+{
+	completer->complete();
+	QWidget *popup = completer->popup();
+	if (popup)
+		popup->setAttribute(Qt::WA_InputMethodEnabled);
+}
+
 void TagWidget::reparse()
 {
 	highlight();
@@ -108,10 +124,10 @@ void TagWidget::reparse()
 				if (popup)
 					popup->hide();
 			} else {
-				m_completer->complete();
+				complete(m_completer);
 			}
 		} else {
-			m_completer->complete();
+			complete(m_completer);
 		}
 	}
 }
@@ -196,6 +212,7 @@ void TagWidget::keyPressEvent(QKeyEvent *e)
 		keyPressEvent(&fakeEvent);
 	} else {
 		GroupedLineEdit::keyPressEvent(e);
+		reparse();
 	}
 	lastFinishedTag = finishedTag;
 }

@@ -1,27 +1,55 @@
 name: Android
 on:
   push:
+    paths-ignore:
+    - scripts/docker/**
     branches:
     - master
   pull_request:
+    paths-ignore:
+    - scripts/docker/**
     branches:
     - master
+
+env:
+  BUILD_ROOT: ${{ github.workspace }}/..
+  KEYSTORE_FILE: ${{ github.workspace }}/../subsurface.keystore
 
 jobs:
   buildAndroid:
     runs-on: ubuntu-latest
     container:
-      image: docker://subsurface/android-build-container:5.15.1
+      image: docker://subsurface/android-build:5.15.2
 
     steps:
     - name: checkout sources
-      uses: actions/checkout@v1
+      uses: actions/checkout@v4
+
+    - name: atomically create or retrieve the build number and assemble release notes
+      id: version_number
+      if: github.event_name == 'push'
+      run: |
+        bash scripts/get-atomic-buildnr.sh ${{ github.sha }} ${{ secrets.NIGHTLY_BUILDS }} "CICD-release"
+        version=$(cat release-version)
+        echo "version=$version" >> $GITHUB_OUTPUT
+
+    - name: store dummy version and build number for non-push build runs
+      if: github.event_name != 'push'
+      run: |
+        echo "100" > latest-subsurface-buildnumber
+        echo "CICD-pull-request" > latest-subsurface-buildnumber-extension
+
+    - name: set up the keystore
+      if: github.event_name == 'push'
+      run: |
+        echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > $KEYSTORE_FILE
 
     - name: run build
+      id: build
       run: |
         # this is rather awkward, but it allows us to use the preinstalled
         # Android and Qt versions with relative paths
-        cd $GITHUB_WORKSPACE/..
+        cd $BUILD_ROOT
         ln -s /android/5.15.* .
         ln -s /android/build-tools .
         ln -s /android/cmdline-tools .
@@ -29,11 +57,32 @@ jobs:
         ln -s /android/platform-tools .
         ln -s /android/platforms .
         ln -s /android/tools .
-        ls -l
         git config --global user.email "ci@subsurface-divelog.org"
         git config --global user.name "Subsurface CI"
-        # it turns out our build container doesn't have a native compiler
-        # yet ECM needs that
-        apt-get install --reinstall cpp-7 gcc-7-base libgcc-7-dev libcc1-0 gcc-7
-        bash -x ./subsurface/packaging/android/qmake-build.sh
+        git config --global --add safe.directory $GITHUB_WORKSPACE
+        git config --global --add safe.directory $GITHUB_WORKSPACE/libdivecomputer
+        # get the build number via curl so this works both for a pull request as well as a push
+        BUILDNR=$(curl -q https://raw.githubusercontent.com/subsurface/nightly-builds/main/latest-subsurface-buildnumber)
+        export OUTPUT_DIR="$GITHUB_WORKSPACE"
+        export KEYSTORE_FILE="$KEYSTORE_FILE"
+        export KEYSTORE_PASSWORD="pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}"
+        export KEYSTORE_ALIAS="${{ secrets.ANDROID_KEYSTORE_ALIAS }}"
+        bash -x ./subsurface/packaging/android/qmake-build.sh -buildnr ${BUILDNR}
 
+    # only publish a 'release' on push events (those include merging a PR)
+    - name: upload binaries
+      if: github.event_name == 'push'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ steps.version_number.outputs.version }}
+        repository:  ${{ github.repository_owner }}/nightly-builds
+        token: ${{ secrets.NIGHTLY_BUILDS }}
+        prerelease: false
+        fail_on_unmatched_files: true
+        files: |
+          Subsurface-mobile-${{ steps.version_number.outputs.version }}.apk
+
+    - name: delete the keystore
+      if: github.event_name == 'push'
+      run: |
+        rm $KEYSTORE_FILE

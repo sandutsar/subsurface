@@ -6,8 +6,7 @@
 #include <QHash>
 #include <QLoggingCategory>
 
-#include "divesite.h"
-#include "device.h"
+#include "divelog.h"
 #include "libdivecomputer.h"
 #include "connectionlistmodel.h"
 #if BT_SUPPORT
@@ -33,6 +32,7 @@ public:
 	bool forceDownload() const;
 	bool saveLog() const;
 	int diveId() const;
+	bool syncTime() const;
 
 	/* this needs to be a pointer to make the C-API happy */
 	device_data_t *internalData();
@@ -55,6 +55,7 @@ public:
 #if defined(Q_OS_ANDROID)
 	void setUsbDevice(const android_usb_serial_device_descriptor &usbDescriptor);
 #endif
+	void setSyncTime(bool syncTime);
 private:
 #if defined(Q_OS_ANDROID)
 	struct android_usb_serial_device_descriptor androidUsbDescriptor;
@@ -74,9 +75,7 @@ public:
 
 	DCDeviceData *data();
 	QString error;
-	struct dive_table downloadTable;
-	struct dive_site_table diveSiteTable;
-	struct device_table deviceTable;
+	struct divelog log;
 
 private:
 	DCDeviceData *m_data;
@@ -96,9 +95,7 @@ struct mydescriptor {
 * stay like this for now.
 */
 void fill_computer_list();
-extern "C" {
 void show_computer_list();
-}
 extern QStringList vendorList;
 extern QHash<QString, QStringList> productList;
 extern QMap<QString, dc_descriptor_t *> descriptorLookup;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include "desktop-widgets/modeldelegates.h"
+#include "core/sample.h"
 #include "core/subsurface-string.h"
 #include "core/gettextfromc.h"
 #include "desktop-widgets/mainwindow.h"
@@ -11,10 +12,12 @@
 #include "qt-models/tankinfomodel.h"
 #include "qt-models/weightsysteminfomodel.h"
 #include "qt-models/weightmodel.h"
+#include "qt-models/diveplannermodel.h"
 #include "qt-models/divetripmodel.h"
 #include "qt-models/divelocationmodel.h"
 #include "core/qthelper.h"
 #include "core/divesite.h"
+#include "core/selection.h"
 #include "desktop-widgets/simplewidgets.h"
 
 #include <QCompleter>
@@ -32,7 +35,7 @@
 QSize DiveListDelegate::sizeHint(const QStyleOptionViewItem &, const QModelIndex &) const
 {
 	const QFontMetrics metrics(qApp->font());
-	return QSize(50, qMax(22, metrics.height()));
+	return QSize(50, std::max(22, metrics.height()));
 }
 
 // Gets the index of the model in the currentRow and column.
@@ -126,15 +129,6 @@ QWidget *ComboBoxDelegate::createEditor(QWidget *parent, const QStyleOptionViewI
 	currCombo.model = const_cast<QAbstractItemModel *>(index.model());
 	currCombo.activeText = currCombo.model->data(index).toString();
 
-	// Current display of things on Gnome3 looks like shit, so
-	// let's fix that.
-	if (isGnome3Session()) {
-		QPalette p;
-		p.setColor(QPalette::Window, QColor(Qt::white));
-		p.setColor(QPalette::Base, QColor(Qt::white));
-		comboDelegate->lineEdit()->setPalette(p);
-		comboDelegate->setPalette(p);
-	}
 	return comboDelegate;
 }
 
@@ -256,15 +250,25 @@ void TankInfoDelegate::editorClosed(QWidget *, QAbstractItemDelegate::EndEditHin
 		mymodel->setData(IDX(CylindersModel::TYPE), currCombo.activeText, CylindersModel::COMMIT_ROLE);
 }
 
-TankUseDelegate::TankUseDelegate(QObject *parent) : QStyledItemDelegate(parent)
+TankUseDelegate::TankUseDelegate(QObject *parent) : QStyledItemDelegate(parent), currentdc(nullptr)
 {
+}
+
+void TankUseDelegate::setCurrentDC(divecomputer *dc)
+{
+	currentdc = dc;
 }
 
 QWidget *TankUseDelegate::createEditor(QWidget *parent, const QStyleOptionViewItem &, const QModelIndex &) const
 {
 	QComboBox *comboBox = new QComboBox(parent);
-	for (int i = 0; i < NUM_GAS_USE; i++)
-		comboBox->addItem(gettextFromC::tr(cylinderuse_text[i]));
+	if (!currentdc)
+		return comboBox;
+	bool isCcrDive = currentdc->divemode == CCR;
+	for (int i = 0; i < NUM_GAS_USE; i++) {
+		if (isCcrDive || (i != DILUENT && i != OXYGEN))
+			comboBox->addItem(gettextFromC::tr(cylinderuse_text[i]));
+	}
 	return comboBox;
 }
 
@@ -278,7 +282,50 @@ void TankUseDelegate::setEditorData(QWidget *editor, const QModelIndex &index) c
 void TankUseDelegate::setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const
 {
 	QComboBox *comboBox = qobject_cast<QComboBox *>(editor);
-	model->setData(index, comboBox->currentIndex());
+	model->setData(index, cylinderuse_from_text(qPrintable(comboBox->currentText())));
+}
+
+SensorDelegate::SensorDelegate(QObject *parent) : QStyledItemDelegate(parent), currentdc(nullptr)
+{
+}
+
+void SensorDelegate::setCurrentDC(divecomputer *dc)
+{
+	currentdc = dc;
+}
+
+QWidget *SensorDelegate::createEditor(QWidget *parent, const QStyleOptionViewItem &, const QModelIndex &index) const
+{
+	QComboBox *comboBox = new QComboBox(parent);
+
+	if (!currentdc)
+		return comboBox;
+
+	std::vector<int16_t> sensors;
+	for (int i = 0; i < currentdc->samples; ++i) {
+		auto &sample = currentdc->sample[i];
+		for (int s = 0; s < MAX_SENSORS; ++s) {
+			if (sample.pressure[s].mbar) {
+				if (std::find(sensors.begin(), sensors.end(), sample.sensor[s]) == sensors.end())
+					sensors.push_back(sample.sensor[s]);
+			}
+		}
+	}
+	std::sort(sensors.begin(), sensors.end());
+	for (auto s : sensors)
+		comboBox->addItem(QString::number(s));
+
+	comboBox->setCurrentIndex(-1);
+	QString indexString = index.data().toString();
+	if (!indexString.isEmpty())
+		comboBox->setCurrentText(indexString);
+	return comboBox;
+}
+
+void SensorDelegate::setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const
+{
+	QComboBox *comboBox = qobject_cast<QComboBox *>(editor);
+	model->setData(index, comboBox->currentText());
 }
 
 void WSInfoDelegate::editorClosed(QWidget *, QAbstractItemDelegate::EndEditHint hint)
@@ -322,7 +369,7 @@ void AirTypesDelegate::setModelData(QWidget *editor, QAbstractItemModel *model, 
 	model->setData(index, QVariant(combo->currentIndex()));
 }
 
-AirTypesDelegate::AirTypesDelegate(QObject *parent) : ComboBoxDelegate(GasSelectionModel::instance(), parent, false)
+AirTypesDelegate::AirTypesDelegate(QAbstractItemModel *model, QObject *parent) : ComboBoxDelegate(model, parent, false)
 {
 }
 
@@ -338,7 +385,7 @@ void DiveTypesDelegate::setModelData(QWidget *editor, QAbstractItemModel *model,
 	model->setData(index, QVariant(combo->currentIndex()));
 }
 
-DiveTypesDelegate::DiveTypesDelegate(QObject *parent) : ComboBoxDelegate(DiveTypeSelectionModel::instance(), parent, false)
+DiveTypesDelegate::DiveTypesDelegate(QAbstractItemModel *model, QObject *parent) : ComboBoxDelegate(model, parent, false)
 {
 }
 

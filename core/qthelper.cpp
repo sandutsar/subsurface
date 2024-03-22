@@ -2,6 +2,7 @@
 #include "qthelper.h"
 #include "dive.h"
 #include "divelist.h"
+#include "divelog.h"
 #include "core/settings/qPrefLanguage.h"
 #include "core/settings/qPrefUpdateManager.h"
 #include "core/subsurface-qt/divelistnotifier.h"
@@ -35,9 +36,6 @@
 #include <QFont>
 #include <QApplication>
 #include <QTextDocument>
-#include <QPainter>
-#include <QProgressDialog>	// TODO: remove with convertThumbnails()
-#include <QSvgRenderer>
 #include <cstdarg>
 #include <cstdint>
 #ifdef Q_OS_UNIX
@@ -117,9 +115,9 @@ QString printGPSCoords(const location_t *location)
 	return result;
 }
 
-extern "C" char *printGPSCoordsC(const location_t *location)
+std::string printGPSCoordsC(const location_t *location)
 {
-	return copy_qstring(printGPSCoords(location));
+	return printGPSCoords(location).toStdString();
 }
 
 /**
@@ -129,6 +127,7 @@ static bool parseCoord(const QString &txt, int &pos, const QString &positives,
 		       const QString &negatives, const QString &others,
 		       double &value)
 {
+	static const QString separators = QString(",;");
 	bool numberDefined = false, degreesDefined = false,
 		minutesDefined = false, secondsDefined = false;
 	double number = 0.0;
@@ -200,11 +199,8 @@ static bool parseCoord(const QString &txt, int &pos, const QString &positives,
 			numberDefined = false;
 			secondsDefined = true;
 		} else if ((numberDefined || minutesDefined || secondsDefined) &&
-			   (txt[pos] == ',' || txt[pos] == ';')) {
-			// next coordinate coming up
-			// eat the ',' and any subsequent white space
-			while (++pos < txt.size() && txt[pos].isSpace())
-				/* nothing */ ;
+			   separators.indexOf(txt[pos]) >= 0) {
+			// separator; this coordinate is finished
 			break;
 		} else {
 			return false;
@@ -219,6 +215,12 @@ static bool parseCoord(const QString &txt, int &pos, const QString &positives,
 		value += number / 3600.0;
 	else if (numberDefined)
 		return false;
+
+	// We parsed a valid coordinate; eat any subsequent separators and/or
+	// whitespace
+	while (pos < txt.size() && (txt[pos].isSpace() || separators.indexOf(txt[pos]) >= 0))
+		pos++;
+
 	if (sign == -1) value *= -1.0;
 	return true;
 }
@@ -408,7 +410,7 @@ QString getUserAgent()
 	// fill in the system data - use ':' as separator
 	// replace all other ':' with ' ' so that this is easy to parse
 #ifdef SUBSURFACE_MOBILE
-	QString userAgent = QString("Subsurface-mobile:%1(%2):").arg(subsurface_mobile_version()).arg(subsurface_canonical_version());
+	QString userAgent = QString("Subsurface-mobile:%1:").arg(subsurface_canonical_version());
 #elif SUBSURFACE_DOWNLOADER
 	QString userAgent = QString("Subsurface-downloader:%1:").arg(subsurface_canonical_version());
 #else
@@ -432,11 +434,9 @@ QString getUserAgent()
 
 }
 
-extern "C" const char *subsurface_user_agent()
+std::string subsurface_user_agent()
 {
-	static QString uA = getUserAgent();
-
-	return copy_qstring(uA);
+	return getUserAgent().toStdString();
 }
 
 QString getUiLanguage()
@@ -460,28 +460,28 @@ void initUiLanguage()
 		loc = QLocale(QLocale().uiLanguages().first());
 	}
 
+	// Find language code with one '-', or use the first entry.
 	QStringList languages = loc.uiLanguages();
 	QString uiLang;
-	if (languages[0].contains('-'))
-		uiLang = languages[0];
-	else if (languages.count() > 1 && languages[1].contains('-'))
-		uiLang = languages[1];
-	else if (languages.count() > 2 && languages[2].contains('-'))
-		uiLang = languages[2];
-	else
-		uiLang = languages[0];
+	auto it = std::find_if(languages.begin(), languages.end(), [](const QString &s)
+				{ return s.count('-') == 1; });
+	uiLang = it == languages.end() ? languages[0] : *it;
+#ifdef SUBSURFACE_MOBILE
+	qDebug() << "uiLanguages was" << languages << ", picked" << uiLang;
+#endif
 
 	// there's a stupid Qt bug on MacOS where uiLanguages doesn't give us the country info
 	if (!uiLang.contains('-') && uiLang != loc.bcp47Name()) {
 		QLocale loc2(loc.bcp47Name());
 		loc = loc2;
 		QStringList languages = loc2.uiLanguages();
-		if (languages[0].contains('-'))
-			uiLang = languages[0];
-		else if (languages.count() > 1 && languages[1].contains('-'))
-			uiLang = languages[1];
-		else if (languages.count() > 2 && languages[2].contains('-'))
-			uiLang = languages[2];
+
+		it = std::find_if(languages.begin(), languages.end(), [](const QString &s)
+				{ return s.contains('-'); });
+		uiLang = it == languages.end() ? languages[0] : *it;
+#ifdef SUBSURFACE_MOBILE
+		qDebug() << "bcp47 based languages was" << languages << ", picked" << uiLang;
+#endif
 	}
 
 	free((void*)prefs.locale.lang_locale);
@@ -672,7 +672,7 @@ QString get_water_type_string(int salinity)
 QStringList getWaterTypesAsString()
 {
 	QStringList res;
-	res.reserve(std::end(waterTypes) - std::begin(waterTypes)); // Waiting for C++17's std::size()
+	res.reserve(std::size(waterTypes));
 	for (const char *t: waterTypes)
 		res.push_back(gettextFromC::tr(t));
 	return res;
@@ -715,17 +715,17 @@ static const char *printing_templates = "printing_templates";
 
 QString getPrintingTemplatePathUser()
 {
-	static QString path = QString();
-	if (path.isEmpty())
-		path = QString(system_default_directory()) + QDir::separator() + QString(printing_templates);
+	// Function-local statics are initialized on first invocation
+	static QString path(QString(system_default_directory()) +
+			    QDir::separator() +
+			    QString(printing_templates));
 	return path;
 }
 
 QString getPrintingTemplatePathBundle()
 {
-	static QString path = QString();
-	if (path.isEmpty())
-		path = getSubsurfaceDataPath(printing_templates);
+	// Function-local statics are initialized on first invocation
+	static QString path(getSubsurfaceDataPath(printing_templates));
 	return path;
 }
 
@@ -775,8 +775,8 @@ int parseDurationToSeconds(const QString &text)
 			seconds = numOnly.right(numOnly.length() - minutes.length() - 1);
 		}
 	} else {
-		hours = "0";
-		minutes = numOnly;
+		hours = QStringLiteral("0");
+		minutes = std::move(numOnly);
 	}
 	secs = lrint(hours.toDouble() * 3600 + minutes.toDouble() * 60 + seconds.toDouble());
 	return secs;
@@ -1007,10 +1007,9 @@ QString get_short_dive_date_string(timestamp_t when)
 	return loc.toString(ts.toUTC(), QString(prefs.date_format_short) + " " + prefs.time_format);
 }
 
-char *get_dive_date_c_string(timestamp_t when)
+std::string get_dive_date_c_string(timestamp_t when)
 {
-	QString text = get_short_dive_date_string(when);
-	return copy_qstring(text);
+	return get_short_dive_date_string(when).toStdString();
 }
 
 static QString get_dive_only_date_string(timestamp_t when)
@@ -1022,12 +1021,14 @@ static QString get_dive_only_date_string(timestamp_t when)
 
 QString get_first_dive_date_string()
 {
-	return dive_table.nr > 0 ? get_dive_only_date_string(dive_table.dives[0]->when) : gettextFromC::tr("no dives");
+	const dive_table *dives = divelog.dives;
+	return dives->nr > 0 ? get_dive_only_date_string(dives->dives[0]->when) : gettextFromC::tr("no dives");
 }
 
 QString get_last_dive_date_string()
 {
-	return dive_table.nr > 0 ? get_dive_only_date_string(dive_table.dives[dive_table.nr - 1]->when) : gettextFromC::tr("no dives");
+	const dive_table *dives = divelog.dives;
+	return dives->nr > 0 ? get_dive_only_date_string(dives->dives[dives->nr - 1]->when) : gettextFromC::tr("no dives");
 }
 
 extern "C" char *get_current_date()
@@ -1068,45 +1069,6 @@ extern "C" char *hashfile_name_string()
 	return copy_qstring(hashfile_name());
 }
 
-// During a transition period, convert old thumbnail-hashes to individual files
-// TODO: remove this code in due course
-static void convertThumbnails(const QHash <QString, QImage> &thumbnails)
-{
-	if (thumbnails.empty())
-		return;
-	// This is a singular occurrence, therefore translating the strings seems not worth it
-	QProgressDialog progress("Convert thumbnails...", "Abort", 0, thumbnails.size());
-	progress.setWindowModality(Qt::WindowModal);
-
-	int count = 0;
-	for (const QString &name: thumbnails.keys()) {
-		const QImage thumbnail = thumbnails[name];
-
-		if (thumbnail.isNull())
-			continue;
-
-		// This is duplicate code (see qt-models/divepicturemodel.cpp)
-		// Not a problem, since this routine will be removed in due course.
-		QString filename = thumbnailFileName(name);
-		if (filename.isEmpty())
-			continue;
-
-		QSaveFile file(filename);
-		if (!file.open(QIODevice::WriteOnly))
-			return;
-		QDataStream stream(&file);
-
-		quint32 type = MEDIATYPE_PICTURE;
-		stream << type;
-		stream << thumbnail;
-		file.commit();
-
-		progress.setValue(++count);
-		if (progress.wasCanceled())
-			break;
-	}
-}
-
 // TODO: This is a temporary helper struct. Remove in due course with convertLocalFilename().
 struct HashToFile {
 	QByteArray hash;
@@ -1125,7 +1087,7 @@ static void convertLocalFilename(const QHash<QString, QByteArray> &hashOf, const
 		return;
 
 	// Create a vector of hash/filename pairs and sort by hash.
-	// Elements can than be accessed with binary search.
+	// Elements can then be accessed with binary search.
 	QHash<QByteArray, QString> canonicalFilenameByHash;
 	QVector<HashToFile> h2f;
 	h2f.reserve(hashOf.size());
@@ -1162,7 +1124,6 @@ void read_hashes()
 		stream >> localFilenameOf;
 		locker.unlock();
 		hashfile.close();
-		convertThumbnails(thumbnailCache);
 		convertLocalFilename(hashOf, localFilenameByHash);
 	}
 	QMutexLocker locker(&hashOfMutex);
@@ -1432,13 +1393,13 @@ extern "C" char *cloud_url()
 	return copy_qstring(filename);
 }
 
-extern "C" const char *normalize_cloud_name(const char *remote_in)
+std::string normalize_cloud_name(const char *remote_in)
 {
 	// replace ssrf-cloud-XX.subsurface... names with cloud.subsurface... names
 	// that trailing '/' is to match old code
 	QString ri(remote_in);
 	ri.replace(QRegularExpression(CLOUD_HOST_PATTERN), CLOUD_HOST_GENERIC "/");
-	return strdup(ri.toUtf8().constData());
+	return ri.toStdString();
 }
 
 extern "C" bool getProxyString(char **buffer)
@@ -1485,19 +1446,6 @@ void init_proxy()
 		proxy.setPassword(prefs.proxy_pass);
 	}
 	QNetworkProxy::setApplicationProxy(proxy);
-}
-
-QString getUUID()
-{
-	QString uuidString;
-	uuidString = qPrefUpdateManager::uuidString();
-	if (uuidString != "") {
-		QUuid uuid = QUuid::createUuid();
-		uuidString = uuid.toString();
-		qPrefUpdateManager::set_uuidString(uuidString);
-	}
-	uuidString.replace("{", "").replace("}", "");
-	return uuidString;
 }
 
 void parse_seabear_header(const char *filename, struct xml_params *params)
@@ -1676,12 +1624,10 @@ void uiNotification(const QString &msg)
 // function to call to get changes for a git commit
 QString (*changesCallback)() = nullptr;
 
-extern "C" char *get_changes_made()
+std::string get_changes_made()
 {
-	if (changesCallback != nullptr)
-		return copy_qstring(changesCallback());
-	else
-		return nullptr;
+	return changesCallback != nullptr ? changesCallback().toStdString()
+					  : std::string();
 }
 
 // Generate a cylinder-renumber map for use when the n-th cylinder
@@ -1720,27 +1666,4 @@ std::vector<int> get_cylinder_map_for_add(int count, int n)
 extern "C" void emit_reset_signal()
 {
 	emit diveListNotifier.dataReset();
-}
-
-QImage renderSVGIcon(const char *id, int size, bool transparent)
-{
-	QImage res(size, size, transparent ? QImage::Format_ARGB32 : QImage::Format_RGB32);
-	res.fill(transparent ? Qt::transparent : Qt::white);
-	QSvgRenderer svg{QString(id)};
-	QPainter painter(&res);
-	svg.render(&painter);
-	return res;
-}
-
-// As renderSVGIcon(), but render to a fixed width and scale height accordingly
-// and have a transparent background.
-QImage renderSVGIconWidth(const char *id, int size)
-{
-	QSvgRenderer svg{QString(id)};
-	QSize svgSize = svg.defaultSize();
-	QImage res(size, size * svgSize.height() / svgSize.width(), QImage::Format_ARGB32);
-	res.fill(Qt::transparent);
-	QPainter painter(&res);
-	svg.render(&painter);
-	return res;
 }

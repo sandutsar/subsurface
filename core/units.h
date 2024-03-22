@@ -14,6 +14,7 @@ extern "C" {
 #endif
 
 #define FRACTION(n, x) ((unsigned)(n) / (x)), ((unsigned)(n) % (x))
+#define SIGNED_FRAC(n, x) ((n) >= 0 ? '+': '-'), ((n) >= 0 ? (unsigned)(n) / (x) : (-(n) / (x))), ((unsigned)((n) >= 0 ? (n) : -(n)) % (x))
 
 #define O2_IN_AIR 209 // permille
 #define N2_IN_AIR 781
@@ -329,12 +330,6 @@ struct units {
 #define SI_UNITS                                                                                           \
         {                                                                                                  \
 	        .length = METERS, .volume = LITER, .pressure = BAR, .temperature = CELSIUS, .weight = KG,  \
-		.vertical_speed_time = MINUTES, .duration_units = MIXED, .show_units_table = false         \
-        }
-
-#define IMPERIAL_UNITS                                                                                     \
-        {                                                                                                  \
-	        .length = FEET, .volume = CUFT, .pressure = PSI, .temperature = FAHRENHEIT, .weight = LBS, \
 		.vertical_speed_time = MINUTES, .duration_units = MIXED, .show_units_table = false         \
         }
 

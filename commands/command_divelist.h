@@ -99,9 +99,7 @@ private:
 class ImportDives : public DiveListBase {
 public:
 	// Note: dives and trips are consumed - after the call they will be empty.
-	ImportDives(struct dive_table *dives, struct trip_table *trips, struct dive_site_table *sites,
-		    struct device_table *devices, struct filter_preset_table *filter_presets, int flags,
-		    const QString &source);
+	ImportDives(struct divelog *log, int flags, const QString &source);
 private:
 	void undoit() override;
 	void redoit() override;
@@ -114,7 +112,7 @@ private:
 
 	// For redo
 	std::vector<OwningDiveSitePtr>	sitesToAdd;
-	std::vector<std::pair<QString,FilterData>>
+	std::vector<std::pair<std::string,FilterData>>
 					filterPresetsToAdd;
 
 	// For undo
@@ -239,7 +237,7 @@ class DiveComputerBase : public DiveListBase {
 protected:
 	// old_dive must be a dive known to the core.
 	// new_dive must be new dive whose ownership is taken.
-	DiveComputerBase(dive *old_dive, dive *new_dive, int dc_nr_after);
+	DiveComputerBase(dive *old_dive, dive *new_dive, int dc_nr_before, int dc_nr_after);
 private:
 	void undoit() override;
 	void redoit() override;

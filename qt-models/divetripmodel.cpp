@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "qt-models/divetripmodel.h"
 #include "core/divefilter.h"
+#include "core/divelog.h"
 #ifdef SUBSURFACE_MOBILE
 #include "qt-models/mobilelistmodel.h"
 #endif
@@ -10,6 +11,7 @@
 #include "core/string-format.h"
 #include "core/trip.h"
 #include "core/qthelper.h"
+#include "core/range.h"
 #include "core/divesite.h"
 #include "core/picture.h"
 #include "core/subsurface-string.h"
@@ -56,6 +58,8 @@ static QVariant dive_table_alignment(int column)
 	case DiveTripModelBase::BUDDIES:
 	case DiveTripModelBase::DIVEGUIDE:
 	case DiveTripModelBase::LOCATION:
+	case DiveTripModelBase::NOTES:
+	case DiveTripModelBase::DIVEMODE:
 		return int(Qt::AlignLeft | Qt::AlignVCenter);
 	}
 	return QVariant();
@@ -175,7 +179,7 @@ static QString displaySac(const struct dive *d, bool units)
 	if (!d->sac)
 		return QString();
 	QString s = get_volume_string(d->sac, units);
-	return units ? s + gettextFromC::tr("/min") : s;
+	return units ? s + gettextFromC::tr("/min") : std::move(s);
 }
 
 static QString displayWeight(const struct dive *d, bool units)
@@ -205,8 +209,8 @@ static QPixmap &getPhotoIcon(int idx)
 	if (!icons) {
 		const IconMetrics &im = defaultIconMetrics();
 		icons = std::make_unique<QPixmap[]>(std::size(icon_names));
-		for (size_t i = 0; i < std::size(icon_names); ++i)
-			icons[i] = QIcon(icon_names[i]).pixmap(im.sz_small, im.sz_small);
+		for (auto [i, name]: enumerated_range(icon_names))
+			icons[i] = QIcon(name).pixmap(im.sz_small, im.sz_small);
 	}
 	return icons[idx];
 }
@@ -255,6 +259,10 @@ QString DiveTripModelBase::getDescription(int column)
 		return tr("Dive guide");
 	case LOCATION:
 		return tr("Location");
+	case NOTES:
+		return tr("Notes");
+	case DIVEMODE:
+		return tr("Divemode");
 	default:
 		return QString();
 	}
@@ -279,13 +287,13 @@ QVariant DiveTripModelBase::diveData(const struct dive *d, int column, int role)
 										      formatDiveDuration(d));
 	case MobileListModel::RatingRole: return d->rating;
 	case MobileListModel::VizRole: return d->visibility;
-	case MobileListModel::SuitRole: return d->suit;
+	case MobileListModel::SuitRole: return QString(d->suit);
 	case MobileListModel::AirTempRole: return get_temperature_string(d->airtemp, true);
 	case MobileListModel::WaterTempRole: return get_temperature_string(d->watertemp, true);
 	case MobileListModel::SacRole: return formatSac(d);
 	case MobileListModel::SumWeightRole: return formatSumWeight(d);
-	case MobileListModel::DiveGuideRole: return d->diveguide;
-	case MobileListModel::BuddyRole: return d->buddy;
+	case MobileListModel::DiveGuideRole: return QString(d->diveguide);
+	case MobileListModel::BuddyRole: return QString(d->buddy);
 	case MobileListModel::TagsRole: return get_taglist_string(d->tag_list);
 	case MobileListModel::NotesRole: return formatNotes(d);
 	case MobileListModel::GpsRole: return formatDiveGPS(d);
@@ -351,10 +359,11 @@ QVariant DiveTripModelBase::diveData(const struct dive *d, int column, int role)
 		case LOCATION:
 			return QString(get_dive_location(d));
 		case GAS:
-			char *gas_string = get_dive_gas_string(d);
-			QString ret(gas_string);
-			free(gas_string);
-			return ret;
+			return formatDiveGasString(d);
+		case NOTES:
+			return QString(d->notes);
+		case DIVEMODE:
+			return QString(divemode_text_ui[(int)d->dc.divemode]);
 		}
 		break;
 	case Qt::DecorationRole:
@@ -443,6 +452,10 @@ QVariant DiveTripModelBase::headerData(int section, Qt::Orientation orientation,
 			return tr("Dive guide");
 		case LOCATION:
 			return tr("Location");
+		case NOTES:
+			return tr("Notes");
+		case DIVEMODE:
+			return tr("Divemode");
 		}
 		break;
 	case Qt::ToolTipRole:
@@ -460,7 +473,7 @@ void DiveTripModelBase::initSelection()
 {
 	std::vector<dive *> dives = getDiveSelection();
 	if (!dives.empty())
-		setSelection(dives, current_dive);
+		setSelection(dives, current_dive, -1);
 	else
 		select_newest_visible_dive();
 }
@@ -524,7 +537,7 @@ static ShownChange updateShownAll()
 	return res;
 }
 
-void DiveTripModelBase::currentChanged()
+void DiveTripModelBase::currentChanged(dive *currentDive)
 {
 	// On Desktop we use a signal to forward current-dive changed, on mobile we use ROLE_CURRENT.
 	// TODO: Unify - use the role for both.
@@ -534,21 +547,12 @@ void DiveTripModelBase::currentChanged()
 		QModelIndex oldIdx = diveToIdx(oldCurrent);
 		dataChanged(oldIdx, oldIdx, roles);
 	}
-	if (current_dive && oldCurrent != current_dive) {
-		QModelIndex newIdx = diveToIdx(current_dive);
+	if (currentDive && oldCurrent != currentDive) {
+		QModelIndex newIdx = diveToIdx(currentDive);
 		dataChanged(newIdx, newIdx, roles);
 	}
-#else
-	if (oldCurrent == current_dive)
-		return;
-	if (current_dive) {
-		QModelIndex newIdx = diveToIdx(current_dive);
-		emit currentDiveChanged(newIdx);
-	} else {
-		emit currentDiveChanged(QModelIndex());
-	}
 #endif
-	oldCurrent = current_dive;
+	oldCurrent = currentDive;
 }
 
 // Find a range of matching elements in a vector.
@@ -685,7 +689,8 @@ DiveTripModelTree::DiveTripModelTree(QObject *parent) : DiveTripModelBase(parent
 	connect(&diveListNotifier, &DiveListNotifier::diveSiteChanged, this, &DiveTripModelTree::diveSiteChanged);
 	connect(&diveListNotifier, &DiveListNotifier::divesMovedBetweenTrips, this, &DiveTripModelTree::divesMovedBetweenTrips);
 	connect(&diveListNotifier, &DiveListNotifier::divesTimeChanged, this, &DiveTripModelTree::divesTimeChanged);
-	connect(&diveListNotifier, &DiveListNotifier::divesSelected, this, &DiveTripModelTree::divesSelected);
+	connect(&diveListNotifier, &DiveListNotifier::divesSelected, this, &DiveTripModelTree::divesSelectedSlot);
+	connect(&diveListNotifier, &DiveListNotifier::tripSelected, this, &DiveTripModelTree::tripSelected);
 	connect(&diveListNotifier, &DiveListNotifier::tripChanged, this, &DiveTripModelTree::tripChanged);
 	connect(&diveListNotifier, &DiveListNotifier::filterReset, this, &DiveTripModelTree::filterReset);
 	connect(&diveListNotifier, &DiveListNotifier::cylinderAdded, this, &DiveTripModelTree::diveChanged);
@@ -706,7 +711,7 @@ void DiveTripModelTree::populate()
 	// we want this to be two calls as the second text is overwritten below by the lines starting with "\r"
 	uiNotification(QObject::tr("populate data model"));
 	uiNotification(QObject::tr("start processing"));
-	for (int i = 0; i < dive_table.nr; ++i) {
+	for (int i = 0; i < divelog.dives->nr; ++i) {
 		dive *d = get_dive(i);
 		if (!d) // should never happen
 			continue;
@@ -736,7 +741,7 @@ void DiveTripModelTree::populate()
 
 	// Remember the index of the current dive
 	oldCurrent = current_dive;
-	uiNotification(QObject::tr("%1 dives processed").arg(dive_table.nr));
+	uiNotification(QObject::tr("%1 dives processed").arg(divelog.dives->nr));
 }
 
 int DiveTripModelTree::rowCount(const QModelIndex &parent) const
@@ -915,7 +920,7 @@ void DiveTripModelTree::divesHidden(dive_trip *trip, const QVector<dive *> &dive
 			removeTrip(idx); // If all dives are hidden, remove the whole trip!
 		} else {
 			removeDivesFromTrip(idx, dives);
-			// Note: if dives are shown and hidden from a trip, we send to signals. Shrug.
+			// Note: if dives are shown and hidden from a trip, we send two signals. Shrug.
 			dataChanged(createIndex(idx, 0, noParent), createIndex(idx, 0, noParent));
 		}
 	} else {
@@ -974,7 +979,7 @@ void DiveTripModelTree::topLevelChanged(int idx)
 	// If index changed, move items
 	if (newIdx != idx && newIdx != idx + 1) {
 		beginMoveRows(QModelIndex(), idx, idx, QModelIndex(), newIdx);
-		moveInVector(items, idx, idx + 1, newIdx);
+		move_in_range(items, idx, idx + 1, newIdx);
 		endMoveRows();
 	}
 
@@ -1007,34 +1012,26 @@ void DiveTripModelTree::addDivesToTrip(int trip, const QVector<dive *> &dives)
 
 int DiveTripModelTree::findTripIdx(const dive_trip *trip) const
 {
-	for (int i = 0; i < (int)items.size(); ++i)
-		if (items[i].d_or_t.trip == trip)
-			return i;
-	return -1;
+	return index_of_if(items, [trip] (const Item &item)
+				  { return item.d_or_t.trip == trip; });
 }
 
 int DiveTripModelTree::findDiveIdx(const dive *d) const
 {
-	for (int i = 0; i < (int)items.size(); ++i)
-		if (items[i].isDive(d))
-			return i;
-	return -1;
+	return index_of_if(items, [d] (const Item &item)
+				  { return item.isDive(d); });
 }
 
 int DiveTripModelTree::findDiveInTrip(int tripIdx, const dive *d) const
 {
-	const Item &item = items[tripIdx];
-	for (int i = 0; i < (int)item.dives.size(); ++i)
-		if (item.dives[i] == d)
-			return i;
-	return -1;
+	return index_of(items[tripIdx].dives, d);
 }
 
 int DiveTripModelTree::findInsertionIndex(const dive_trip *trip) const
 {
 	dive_or_trip d_or_t{ nullptr, (dive_trip *)trip };
-	for (int i = 0; i < (int)items.size(); ++i) {
-		if (dive_or_trip_less_than(d_or_t, items[i].d_or_t))
+	for (auto [i, item]: enumerated_range(items)) {
+		if (dive_or_trip_less_than(d_or_t, item.d_or_t))
 			return i;
 	}
 	return items.size();
@@ -1121,8 +1118,8 @@ static QVector<dive *> visibleDives(const QVector<dive *> &dives)
 #ifdef SUBSURFACE_MOBILE
 int DiveTripModelTree::tripInDirection(const struct dive *d, int direction) const
 {
-	for (int i = 0; i < (int)items.size(); ++i) {
-		if (items[i].d_or_t.dive == d || (items[i].d_or_t.trip && findDiveInTrip(i, d) != -1)) {
+	for (auto [i, item]: enumerated_range(items)) {
+		if (item.d_or_t.dive == d || (item.d_or_t.trip && findDiveInTrip(i, d) != -1)) {
 			// now walk in the direction given to find a trip
 			int offset = direction;
 			while (i + offset >= 0 && i + offset < (int)items.size()) {
@@ -1380,7 +1377,7 @@ QModelIndex DiveTripModelTree::diveToIdx(const dive *d) const
 	}
 }
 
-void DiveTripModelTree::divesSelected(const QVector<dive *> &divesIn)
+void DiveTripModelTree::divesSelectedSlot(const QVector<dive *> &divesIn, dive *currentDive, int currentDC)
 {
 	QVector <dive *> dives = visibleDives(divesIn);
 
@@ -1389,13 +1386,13 @@ void DiveTripModelTree::divesSelected(const QVector<dive *> &divesIn)
 	QVector<QModelIndex> indices;
 	indices.reserve(dives.count());
 
-	processByTrip(dives, [this, &indices] (dive_trip *trip, const QVector<dive *> &divesInTrip)
+	processByTrip(std::move(dives), [this, &indices] (dive_trip *trip, const QVector<dive *> &divesInTrip)
 		      { divesSelectedTrip(trip, divesInTrip, indices); });
 
-	emit selectionChanged(indices);
+	emit divesSelected(indices, diveToIdx(currentDive), currentDC);
 
 	// The current dive has changed. Transform the current dive into an index and pass it on to the view.
-	currentChanged();
+	currentChanged(currentDive);
 }
 
 void DiveTripModelTree::divesSelectedTrip(dive_trip *trip, const QVector<dive *> &dives, QVector<QModelIndex> &indices)
@@ -1405,8 +1402,8 @@ void DiveTripModelTree::divesSelectedTrip(dive_trip *trip, const QVector<dive *>
 		// Since both lists are sorted, we can do this linearly. Perhaps a binary search
 		// would be better?
 		int j = 0; // Index in items array
-		for (int i = 0; i < dives.size(); ++i) {
-			while (j < (int)items.size() && !items[j].isDive(dives[i]))
+		for (struct dive *dive: dives) {
+			while (j < (int)items.size() && !items[j].isDive(dive))
 				++j;
 			if (j >= (int)items.size())
 				break;
@@ -1426,14 +1423,32 @@ void DiveTripModelTree::divesSelectedTrip(dive_trip *trip, const QVector<dive *>
 		// would be better?
 		int j = 0; // Index in items array
 		const Item &entry = items[idx];
-		for (int i = 0; i < dives.size(); ++i) {
-			while (j < (int)entry.dives.size() && entry.dives[j] != dives[i])
+		for (struct dive *dive: dives) {
+			while (j < (int)entry.dives.size() && entry.dives[j] != dive)
 				++j;
 			if (j >= (int)entry.dives.size())
 				break;
 			indices.append(createIndex(j, 0, idx));
 		}
 	}
+}
+
+void DiveTripModelTree::tripSelected(dive_trip *trip, dive *currentDive)
+{
+	if (!trip)
+		return;
+
+	// Find the trip.
+	int idx = findTripIdx(trip);
+	if (idx < 0) {
+		// We don't know the trip - this shouldn't happen. We seem to have
+		// missed some signals!
+		qWarning() << "DiveTripModelTree::tripSelected(): unknown trip";
+		return;
+	}
+
+	QModelIndex tripIdx = createIndex(idx, 0, noParent);
+	emit DiveTripModelBase::tripSelected(tripIdx, diveToIdx(currentDive));
 }
 
 bool DiveTripModelTree::lessThan(const QModelIndex &i1, const QModelIndex &i2) const
@@ -1455,7 +1470,8 @@ DiveTripModelList::DiveTripModelList(QObject *parent) : DiveTripModelBase(parent
 	// Does nothing in list-view
 	//connect(&diveListNotifier, &DiveListNotifier::divesMovedBetweenTrips, this, &DiveTripModelList::divesMovedBetweenTrips);
 	connect(&diveListNotifier, &DiveListNotifier::divesTimeChanged, this, &DiveTripModelList::divesTimeChanged);
-	connect(&diveListNotifier, &DiveListNotifier::divesSelected, this, &DiveTripModelList::divesSelected);
+	connect(&diveListNotifier, &DiveListNotifier::divesSelected, this, &DiveTripModelList::divesSelectedSlot);
+	connect(&diveListNotifier, &DiveListNotifier::tripSelected, this, &DiveTripModelList::tripSelected);
 	connect(&diveListNotifier, &DiveListNotifier::filterReset, this, &DiveTripModelList::filterReset);
 	connect(&diveListNotifier, &DiveListNotifier::cylinderAdded, this, &DiveTripModelList::diveChanged);
 	connect(&diveListNotifier, &DiveListNotifier::cylinderEdited, this, &DiveTripModelList::diveChanged);
@@ -1473,8 +1489,8 @@ void DiveTripModelList::populate()
 	DiveFilter::instance()->reset(); // The data was reset - update filter status. TODO: should this really be done here?
 
 	// Fill model
-	items.reserve(dive_table.nr);
-	for (int i = 0; i < dive_table.nr; ++i) {
+	items.reserve(divelog.dives->nr);
+	for (int i = 0; i < divelog.dives->nr; ++i) {
 		dive *d = get_dive(i);
 		if (!d || d->hidden_by_filter)
 			continue;
@@ -1650,7 +1666,7 @@ QModelIndex DiveTripModelList::diveToIdx(const dive *d) const
 	return createIndex(it - items.begin(), 0);
 }
 
-void DiveTripModelList::divesSelected(const QVector<dive *> &divesIn)
+void DiveTripModelList::divesSelectedSlot(const QVector<dive *> &divesIn, dive *currentDive, int currentDC)
 {
 	QVector<dive *> dives = visibleDives(divesIn);
 
@@ -1662,18 +1678,33 @@ void DiveTripModelList::divesSelected(const QVector<dive *> &divesIn)
 	// Since both lists are sorted, we can do this linearly. Perhaps a binary search
 	// would be better?
 	int j = 0; // Index in items array
-	for (int i = 0; i < dives.size(); ++i) {
-		while (j < (int)items.size() && items[j] != dives[i])
+	for (struct dive *dive: dives) {
+		while (j < (int)items.size() && items[j] != dive)
 			++j;
 		if (j >= (int)items.size())
 			break;
 		indices.append(createIndex(j, 0, noParent));
 	}
 
-	emit selectionChanged(indices);
+	emit divesSelected(indices, diveToIdx(currentDive), currentDC);
 
 	// The current dive has changed. Transform the current dive into an index and pass it on to the view.
-	currentChanged();
+	currentChanged(currentDive);
+}
+
+void DiveTripModelList::tripSelected(dive_trip *trip, dive *currentDive)
+{
+	if (!trip)
+		return;
+
+	// In the list view, there are no trips, so simply transform this into
+	// a dive selection.
+	QVector<dive *> dives;
+	dives.reserve(trip->dives.nr);
+	for (int i = 0; i < trip->dives.nr; ++i)
+		dives.push_back(trip->dives.dives[i]);
+
+	divesSelectedSlot(dives, currentDive, -1);
 }
 
 // Simple sorting helper for sorting against a criterium and if
@@ -1752,5 +1783,9 @@ bool DiveTripModelList::lessThan(const QModelIndex &i1, const QModelIndex &i2) c
 		return lessThanHelper(strCmp(d1->diveguide, d2->diveguide), row_diff);
 	case LOCATION:
 		return lessThanHelper(strCmp(get_dive_location(d1), get_dive_location(d2)), row_diff);
+	case NOTES:
+		return lessThanHelper(strCmp(d1->notes, d2->notes), row_diff);
+	case DIVEMODE:
+		return lessThanHelper((int)d1->dc.divemode - (int)d2->dc.divemode, row_diff);
 	}
 }

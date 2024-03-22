@@ -4,7 +4,7 @@
 #
 # this requires Qt5.14 or newer with matching NDK
 #
-# the packaging/android/android-build-setup.sh sets up an environment that works for this
+# the scripts/docker/android-build-container/android-build-setup.sh sets up an environment that works for this
 
 set -eu
 
@@ -21,17 +21,8 @@ popd
 # is this a release or debug build
 BUILD_TYPE=Debug
 
-# and now we need a monotonic build number...
-if [ ! -f ./buildnr.dat ] ; then
-	BUILDNR=0
-else
-	BUILDNR=$(cat ./buildnr.dat)
-fi
-BUILDNR=$((BUILDNR+1))
-echo "${BUILDNR}" > ./buildnr.dat
-
 # Read build variables
-source $SUBSURFACE_SOURCE/packaging/android/variables.sh
+source $SUBSURFACE_SOURCE/scripts/docker/android-build-container/variables.sh
 
 # this assumes that the Subsurface source directory is in the same
 # directory hierarchy as the SDK and NDK
@@ -80,17 +71,25 @@ while [ "$#" -gt 0 ] ; do
 	esac
 done
 
+if [ -z "${BUILDNR+X}" ] ; then
+	# we need a monotonic build number...
+	if [ ! -f ./buildnr.dat ] ; then
+		BUILDNR=0
+	else
+		BUILDNR=$(cat ./buildnr.dat)
+	fi
+	BUILDNR=$((BUILDNR+1))
+fi
+echo "${BUILDNR}" > ./buildnr.dat
+
 mkdir -p "$BUILDROOT"/subsurface-mobile-build
 pushd "$BUILDROOT"/subsurface-mobile-build
 
 # set up the Subsurface versions by hand
-GITVERSION=$(cd "$SUBSURFACE_SOURCE" ; git describe --abbrev=12)
-CANONICALVERSION=$(echo "$GITVERSION" | sed -e 's/-g.*$// ; s/^v//' | sed -e 's/-/./')
-MOBILEVERSION=$(grep MOBILE "$SUBSURFACE_SOURCE"/cmake/Modules/version.cmake | cut -d\" -f 2)
-echo "#define GIT_VERSION_STRING \"$GITVERSION\"" > ssrf-version.h
-echo "#define CANONICAL_VERSION_STRING \"$CANONICALVERSION\"" >> ssrf-version.h
-echo "#define MOBILE_VERSION_STRING \"$MOBILEVERSION\"" >> ssrf-version.h
-SUBSURFACE_MOBILE_VERSION="$MOBILEVERSION ($CANONICALVERSION)"
+CANONICALVERSION=$("$SUBSURFACE_SOURCE"/scripts/get-version)
+echo "#define CANONICAL_VERSION_STRING \"$CANONICALVERSION\"" > ssrf-version.h
+CANONICALVERSION_4=$("$SUBSURFACE_SOURCE"/scripts/get-version 4)
+echo "#define CANONICAL_VERSION_STRING_4 \"$CANONICALVERSION_4\"" >> ssrf-version.h
 popd
 
 if [ "$versionOnly" = "1" ] ; then
@@ -387,7 +386,7 @@ popd
 
 # call qmake to set up the build
 echo "Run qmake to setup the Subsurface-mobile build for all architectures"
-$QMAKE BUILD_NR="$BUILDNR" BUILD_VERSION_NAME="$SUBSURFACE_MOBILE_VERSION" ANDROID_ABIS="$BUILD_ABIS" "$SUBSURFACE_SOURCE"/Subsurface-mobile.pro
+$QMAKE BUILD_NR="$BUILDNR" BUILD_VERSION_NAME="$CANONICALVERSION" ANDROID_ABIS="$BUILD_ABIS" "$SUBSURFACE_SOURCE"/Subsurface-mobile.pro
 
 # if this isn't just a quick rebuild compile the translations
 if [ "$QUICK" = "" ] ; then
@@ -403,5 +402,29 @@ if [ "$QUICK" = "" ] ; then
 fi
 
 # now build the Subsurface aab
-make aab
+make apk
 
+popd
+
+APK=$(find . -name Subsurface-mobile.apk)
+APK_DIR=$(dirname ${APK})
+APK_FILE=$(basename ${APK})
+
+pushd ${APK_DIR}
+if [ -n "${KEYSTORE_FILE+X}" -a -f "${KEYSTORE_FILE}" -a -n "${KEYSTORE_PASSWORD+X}" ]; then
+	APKSIGNER_PARAMS=""
+	if [ -n "${KEYSTORE_ALIAS+X}" ]; then
+		APKSIGNER_PARAMS="${APKSIGNER_PARAMS} --ks-key-alias ${KEYSTORE_ALIAS}"
+	fi
+
+	zip -d ${APK_FILE} 'META-INF/*.SF' 'META-INF/*.RSA'
+	${BUILDROOT}/build-tools/29.0.3/zipalign -p 4 ${APK_FILE} $(basename ${APK_FILE} .apk)-aligned.apk
+	${BUILDROOT}/build-tools/29.0.3/apksigner sign -ks ${KEYSTORE_FILE} -ks-pass ${KEYSTORE_PASSWORD} ${APKSIGNER_PARAMS} -in $(basename ${APK_FILE} .apk)-aligned.apk -out Subsurface-mobile-"${CANONICALVERSION}".apk
+else
+	mv ${APK_FILE} Subsurface-mobile-"${CANONICALVERSION}".apk
+fi
+
+if [ -n "${OUTPUT_DIR+X}" ] ; then
+	mv Subsurface-mobile-"${CANONICALVERSION}".apk "${OUTPUT_DIR}"/
+fi
+popd

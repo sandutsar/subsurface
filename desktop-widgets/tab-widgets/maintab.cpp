@@ -13,10 +13,8 @@
 #include "TabDiveNotes.h"
 #include "TabDivePhotos.h"
 #include "TabDiveStatistics.h"
-#include "TabDiveSite.h"
 
 #include "core/selection.h"
-#include "desktop-widgets/simplewidgets.h" // for isGnome3Session()
 #include "qt-models/diveplannermodel.h"
 
 #include <QShortcut>
@@ -28,6 +26,7 @@ static bool paletteIsDark(const QPalette &p)
 }
 
 MainTab::MainTab(QWidget *parent) : QTabWidget(parent),
+	currentDive(nullptr),
 	lastSelectedDive(true),
 	lastTabSelectedDive(0),
 	lastTabSelectedDiveTrip(0)
@@ -44,8 +43,6 @@ MainTab::MainTab(QWidget *parent) : QTabWidget(parent),
 	addTab(extraWidgets.last(), tr("Media"));
 	extraWidgets << new TabDiveExtraInfo(this);
 	addTab(extraWidgets.last(), tr("Extra Info"));
-	extraWidgets << new TabDiveSite(this);
-	addTab(extraWidgets.last(), tr("Dive sites"));
 
 	// make sure we know if this is a light or dark mode
 	isDark = paletteIsDark(palette());
@@ -53,7 +50,7 @@ MainTab::MainTab(QWidget *parent) : QTabWidget(parent),
 	// call colorsChanged() for the initial setup now that the extraWidgets are loaded
 	colorsChanged();
 
-	connect(&diveListNotifier, &DiveListNotifier::settingsChanged, this, &MainTab::updateDiveInfo);
+	connect(&diveListNotifier, &DiveListNotifier::settingsChanged, this, &MainTab::settingsChanged);
 
 	QShortcut *closeKey = new QShortcut(QKeySequence(Qt::Key_Escape), this);
 	connect(closeKey, &QShortcut::activated, this, &MainTab::escDetected);
@@ -63,33 +60,6 @@ MainTab::MainTab(QWidget *parent) : QTabWidget(parent),
 	else
 		setDocumentMode(false);
 
-	// Current display of things on Gnome3 looks like shit, so
-	// let's fix that.
-	if (isGnome3Session()) {
-		// TODO: Either do this for all scroll areas or none
-		//QPalette p;
-		//p.setColor(QPalette::Window, QColor(Qt::white));
-		//ui.scrollArea->viewport()->setPalette(p);
-
-		// GroupBoxes in Gnome3 looks like I'v drawn them...
-		static const QString gnomeCss = QStringLiteral(
-			"QGroupBox {"
-				"background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,"
-				"stop: 0 #E0E0E0, stop: 1 #FFFFFF);"
-				"border: 2px solid gray;"
-				"border-radius: 5px;"
-				"margin-top: 1ex;"
-			"}"
-			"QGroupBox::title {"
-				"subcontrol-origin: margin;"
-				"subcontrol-position: top center;"
-				"padding: 0 3px;"
-				"background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,"
-				"stop: 0 #E0E0E0, stop: 1 #FFFFFF);"
-			"}");
-		for (QGroupBox *box: findChildren<QGroupBox *>())
-			box->setStyleSheet(gnomeCss);
-	}
 	// QLineEdit and QLabels should have minimal margin on the left and right but not waste vertical space
 	QMargins margins(3, 2, 1, 0);
 	for (QLabel *label: findChildren<QLabel *>())
@@ -101,45 +71,47 @@ void MainTab::nextInputField(QKeyEvent *event)
 	keyPressEvent(event);
 }
 
-void MainTab::updateDiveInfo()
+void MainTab::settingsChanged()
 {
+	// TODO: remember these
+	updateDiveInfo(getDiveSelection(), currentDive, currentDC);
+}
+
+void MainTab::updateDiveInfo(const std::vector<dive *> &selection, dive *currentDiveIn, int currentDCIn)
+{
+	// Remember current dive and divecomputer. This is needed to refresh the
+	// display, for example when the settings change.
+	currentDive = currentDiveIn;
+	currentDC = currentDCIn;
+
 	// don't execute this while planning a dive
 	if (DivePlannerPointsModel::instance()->isPlanner())
 		return;
 
-	// If there is no current dive, disable all widgets except the last two,
-	// which are the dive site tab and the dive computer tabs.
-	// TODO: Conceptually, these two shouldn't even be a tabs here!
+	// If there is no current dive, disable all widgets.
 	bool enabled = current_dive != nullptr;
-	for (int i = 0; i < extraWidgets.size() - 2; ++i)
-		extraWidgets[i]->setEnabled(enabled);
+	for (TabBase *widget: extraWidgets)
+		widget->setEnabled(enabled);
 
-	if (current_dive) {
+	if (currentDive) {
 		for (TabBase *widget: extraWidgets)
-			widget->updateData();
-
-		// If we're on the dive-site tab, we don't want to switch tab when entering / exiting
-		// trip mode. The reason is that
-		// 1) this disrupts the user-experience and
-		// 2) the filter is reset, potentially erasing the current trip under our feet.
-		// TODO: Don't hard code tab location!
-		bool onDiveSiteTab = currentIndex() == 6;
+			widget->updateData(selection, currentDive, currentDC);
 		if (single_selected_trip()) {
 			// Remember the tab selected for last dive but only if we're not on the dive site tab
-			if (lastSelectedDive && !onDiveSiteTab)
+			if (lastSelectedDive)
 				lastTabSelectedDive = currentIndex();
 			setTabText(0, tr("Trip notes"));
 			// Recover the tab selected for last dive trip but only if we're not on the dive site tab
-			if (lastSelectedDive && !onDiveSiteTab)
+			if (lastSelectedDive)
 				setCurrentIndex(lastTabSelectedDiveTrip);
 			lastSelectedDive = false;
 		} else {
 			// Remember the tab selected for last dive trip but only if we're not on the dive site tab
-			if (!lastSelectedDive && !onDiveSiteTab)
+			if (!lastSelectedDive)
 				lastTabSelectedDiveTrip = currentIndex();
 			setTabText(0, tr("Notes"));
 			// Recover the tab selected for last dive but only if we're not on the dive site tab
-			if (!lastSelectedDive && !onDiveSiteTab)
+			if (!lastSelectedDive)
 				setCurrentIndex(lastTabSelectedDive);
 			lastSelectedDive = true;
 		}
@@ -205,4 +177,16 @@ void MainTab::colorsChanged()
 	// finally call the individual updateUi() functions so they can overwrite these style sheets
 	for (TabBase *widget: extraWidgets)
 		widget->updateUi(colorText);
+}
+
+// Called when dives changed. Checks whether the currently displayed
+// dive is affected by the change.
+bool MainTab::includesCurrentDive(const QVector<dive *> &dives) const
+{
+	return currentDive && dives.contains(currentDive);
+}
+
+divecomputer *MainTab::getCurrentDC() const
+{
+	return get_dive_dc(currentDive, currentDC);
 }

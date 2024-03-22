@@ -9,7 +9,7 @@ if [[ $(pwd | grep "subsurface$") || ! -d subsurface || ! -d subsurface/libdivec
 	exit 1;
 fi
 if [[ ! -d googlemaps ]] ; then
-	echo "Please make sure you have the current master of git://github.com/Subsurface/googlemaps"
+	echo "Please make sure you have the current master of https://github.com/Subsurface/googlemaps"
 	echo "checked out in parallel to the Subsurface directory"
 	exit 1;
 fi
@@ -20,7 +20,7 @@ git submodule init
 git submodule update
 cd -
 
-GITVERSION=$(cd subsurface ; git describe --abbrev=12 | sed -e 's/-g.*$// ; s/^v//')
+GITVERSION=$(cd subsurface ; git describe --match "v[0-9]*" --abbrev=12 | sed -e 's/-g.*$// ; s/^v//')
 GITREVISION=$(echo $GITVERSION | sed -e 's/.*-// ; s/.*\..*//')
 VERSION=$(echo $GITVERSION | sed -e 's/-/./')
 GITDATE=$(cd subsurface ; git log -1 --format="%at" | xargs -I{} date -d @{} +%Y-%m-%d)

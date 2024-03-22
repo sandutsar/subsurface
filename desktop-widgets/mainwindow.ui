@@ -59,14 +59,14 @@
     <addaction name="actionCloudstorageopen"/>
     <addaction name="actionCloudstoragesave"/>
     <addaction name="actionCloudOnline"/>
-    <addaction name="separator"/>
     <addaction name="actionClose"/>
+    <addaction name="separator"/>
     <addaction name="actionExport"/>
     <addaction name="actionPrint"/>
-    <addaction name="actionPreferences"/>
-    <addaction name="separator"/>
     <addaction name="actionHash_images"/>
+    <addaction name="actionPreferences"/>
     <addaction name="actionConfigure_Dive_Computer"/>
+    <addaction name="separator"/>
     <addaction name="actionQuit"/>
    </widget>
    <widget class="QMenu" name="menuLog">
@@ -93,6 +93,7 @@
     <addaction name="actionViewProfile"/>
     <addaction name="actionViewInfo"/>
     <addaction name="actionViewMap"/>
+    <addaction name="actionViewDiveSites"/>
     <addaction name="separator"/>
     <addaction name="actionStats"/>
     <addaction name="actionYearlyStatistics"/>
@@ -341,6 +342,14 @@
    </property>
    <property name="shortcut">
     <string notr="true">Ctrl+5</string>
+   </property>
+  </action>
+  <action name="actionViewDiveSites">
+   <property name="text">
+    <string>Dive sites</string>
+   </property>
+   <property name="shortcut">
+    <string notr="true">Ctrl+6</string>
    </property>
   </action>
   <action name="actionDivePlanner">

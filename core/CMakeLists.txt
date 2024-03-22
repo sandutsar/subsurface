@@ -4,16 +4,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	if(ANDROID)
 		set(PLATFORM_SRC android.cpp serial_usb_android.cpp)
 	else()
-		set(PLATFORM_SRC unix.c)
+		set(PLATFORM_SRC unix.cpp)
 	endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
 	set(PLATFORM_SRC android.cpp serial_usb_android.cpp)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-	set(PLATFORM_SRC macos.c)
+	set(PLATFORM_SRC macos.cpp)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-	set(PLATFORM_SRC windows.c)
+	set(PLATFORM_SRC windows.cpp)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
-	set(PLATFORM_SRC unix.c)
+	set(PLATFORM_SRC unix.cpp)
 endif()
 
 if(FTDISUPPORT)
@@ -41,7 +41,7 @@ set(SUBSURFACE_CORE_LIB_SRCS
 	checkcloudconnection.h
 	cloudstorage.cpp
 	cloudstorage.h
-	cochran.c
+	cochran.cpp
 	cochran.h
 	color.cpp
 	color.h
@@ -51,7 +51,7 @@ set(SUBSURFACE_CORE_LIB_SRCS
 	configuredivecomputerthreads.h
 	connectionlistmodel.cpp
 	connectionlistmodel.h
-	datatrak.c
+	datatrak.cpp
 	datatrak.h
 	deco.c
 	deco.h
@@ -59,7 +59,7 @@ set(SUBSURFACE_CORE_LIB_SRCS
 	device.h
 	devicedetails.cpp
 	devicedetails.h
-	dive.c
+	dive.cpp
 	dive.h
 	divecomputer.c
 	divecomputer.h
@@ -68,6 +68,8 @@ set(SUBSURFACE_CORE_LIB_SRCS
 	divefilter.h
 	divelist.c
 	divelist.h
+	divelog.cpp
+	divelog.h
 	divelogexportlogic.cpp
 	divelogexportlogic.h
 	divesite-helper.cpp
@@ -79,13 +81,15 @@ set(SUBSURFACE_CORE_LIB_SRCS
 	downloadfromdcthread.h
 	event.c
 	event.h
+	eventtype.cpp
+	eventtype.h
 	equipment.c
 	equipment.h
 	errorhelper.c
 	exif.cpp
 	exif.h
 	extradata.h
-	file.c
+	file.cpp
 	file.h
 	filterconstraint.cpp
 	filterconstraint.h
@@ -103,22 +107,24 @@ set(SUBSURFACE_CORE_LIB_SRCS
 	gettext.h
 	gettextfromc.cpp
 	gettextfromc.h
-	git-access.c
+	git-access.cpp
 	git-access.h
+	globals.cpp
+	globals.h
 	imagedownloader.cpp
 	imagedownloader.h
-	import-cobalt.c
-	import-csv.c
+	import-cobalt.cpp
+	import-csv.cpp
 	import-csv.h
-	import-divinglog.c
-	import-shearwater.c
-	import-suunto.c
-	import-seac.c
+	import-divinglog.cpp
+	import-shearwater.cpp
+	import-suunto.cpp
+	import-seac.cpp
 	interpolate.h
-	libdivecomputer.c
+	libdivecomputer.cpp
 	libdivecomputer.h
-	liquivision.c
-	load-git.c
+	liquivision.cpp
+	load-git.cpp
 	membuffer.cpp
 	membuffer.h
 	metadata.cpp
@@ -126,9 +132,10 @@ set(SUBSURFACE_CORE_LIB_SRCS
 	metrics.cpp
 	metrics.h
 	ostctools.c
+	owning_ptrs.h
 	parse-gpx.cpp
-	parse-xml.c
-	parse.c
+	parse-xml.cpp
+	parse.cpp
 	parse.h
 	picture.c
 	picture.h
@@ -145,13 +152,14 @@ set(SUBSURFACE_CORE_LIB_SRCS
 	qt-init.cpp
 	qthelper.cpp
 	qthelper.h
-	sample.c
+	range.h
+	sample.cpp
 	sample.h
-	save-git.c
+	save-git.cpp
 	save-html.c
 	save-html.h
 	save-profiledata.c
-	save-xml.c
+	save-xml.cpp
 	selection.cpp
 	selection.h
 	sha1.c
@@ -163,8 +171,9 @@ set(SUBSURFACE_CORE_LIB_SRCS
 	string-format.h
 	string-format.cpp
 	strtod.c
+	subsurface-float.h
 	subsurface-string.h
-	subsurfacestartup.c
+	subsurfacestartup.cpp
 	subsurfacestartup.h
 	subsurfacesysinfo.cpp
 	subsurfacesysinfo.h
@@ -172,12 +181,12 @@ set(SUBSURFACE_CORE_LIB_SRCS
 	tag.h
 	taxonomy.c
 	taxonomy.h
-	time.c
+	time.cpp
 	timer.c
 	timer.h
 	trip.c
 	trip.h
-	uemis-downloader.c
+	uemis-downloader.cpp
 	uemis.c
 	uemis.h
 	units.h

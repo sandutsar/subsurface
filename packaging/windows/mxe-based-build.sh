@@ -150,7 +150,6 @@ fi
 if [ ! -f libdivecomputer/configure ] ; then
 	cd libdivecomputer
 	autoreconf --install
-	autoreconf --install
 fi
 
 # if this is a 64bit build then build libmtp as that isn't available via MXE
@@ -171,15 +170,16 @@ if [ "$MXEBUILDTYPE" = "x86_64-w64-mingw32.shared" ] ; then
 			--host="$MXEBUILDTYPE" \
 			--enable-shared \
 			--prefix="$BASEDIR"/"$MXEDIR"/usr/"$MXEBUILDTYPE"
+		cd src
 		make $JOBS
 		make install
 	fi
 fi
 
 cd "$BUILDDIR"
-CURRENT_SHA=$(cd "$BASEDIR"/subsurface/libdivecomputer ; git describe)
+CURRENT_SHA=$(cd "$BASEDIR"/subsurface/libdivecomputer ; git describe --always --long --dirty)
 PREVIOUS_SHA=$(cat "libdivecomputer.SHA" 2>/dev/null || echo)
-if [ ! "$CURRENT_SHA" = "$PREVIOUS_SHA" ] || [ ! -d libdivecomputer ] || [ -f build.libdivecomputer ] ; then
+if [ ! "$CURRENT_SHA" = "$PREVIOUS_SHA" ] || [[ "$CURRENT_SHA" == *-dirty ]] || [ ! -d libdivecomputer ] || [ -f build.libdivecomputer ] ; then
 	rm -f build.libdivecomputer
 	mkdir -p libdivecomputer
 	cd libdivecomputer

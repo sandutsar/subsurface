@@ -2,6 +2,7 @@
 
 #include "command_edit.h"
 #include "core/divelist.h"
+#include "core/divelog.h"
 #include "core/fulltext.h"
 #include "core/qthelper.h" // for copy_qstring
 #include "core/sample.h"
@@ -158,7 +159,7 @@ void EditBase<T>::undo()
 	DiveField id = fieldId();
 	emit diveListNotifier.divesChanged(stdToQt<dive *>(dives), id);
 	if (!placingCommand())
-		setSelection(selectedDives, current);
+		setSelection(selectedDives, current, -1);
 }
 
 // We have to manually instantiate the constructors of the EditBase class,
@@ -551,7 +552,7 @@ void EditTagsBase::undo()
 	// Send signals.
 	DiveField id = fieldId();
 	emit diveListNotifier.divesChanged(stdToQt<dive *>(dives), id);
-	setSelection(selectedDives, current);
+	setSelection(selectedDives, current, -1);
 }
 
 // Undo and redo do the same as just the stored value is exchanged
@@ -861,7 +862,7 @@ void ReplanDive::undo()
 	emit diveListNotifier.divesChanged(divesToNotify, DiveField::DATETIME | DiveField::DURATION | DiveField::DEPTH | DiveField::MODE |
 							  DiveField::NOTES | DiveField::SALINITY | DiveField::ATM_PRESS);
 	if (!placingCommand())
-		setSelection({ d }, d);
+		setSelection({ d }, d, -1);
 }
 
 // Redo and undo do the same
@@ -881,8 +882,8 @@ QString editProfileTypeToString(EditProfileType type, int count)
 	}
 }
 
-EditProfile::EditProfile(const dive *source, EditProfileType type, int count) : d(current_dive),
-	dcNr(dc_number),
+EditProfile::EditProfile(const dive *source, int dcNr, EditProfileType type, int count) : d(current_dive),
+	dcNr(dcNr),
 	maxdepth({0}),
 	meandepth({0}),
 	dcmaxdepth({0}),
@@ -934,7 +935,7 @@ void EditProfile::undo()
 	QVector<dive *> divesToNotify = { d };
 	emit diveListNotifier.divesChanged(divesToNotify, DiveField::DURATION | DiveField::DEPTH);
 	if (!placingCommand())
-		setSelection({ d }, d);
+		setSelection({ d }, d, dcNr);
 }
 
 // Redo and undo do the same
@@ -1177,34 +1178,11 @@ static bool same_cylinder_size(const cylinder_t &cyl1, const cylinder_t &cyl2)
 	       cyl1.type.workingpressure.mbar == cyl2.type.workingpressure.mbar;
 }
 
-static bool same_cylinder_pressure(const cylinder_t &cyl1, const cylinder_t &cyl2)
-{
-	return cyl1.start.mbar == cyl2.start.mbar &&
-	       cyl1.end.mbar == cyl2.end.mbar;
-}
-
 // Flags for comparing cylinders
 static constexpr int SAME_TYPE = 1 << 0;
 static constexpr int SAME_SIZE = 1 << 1;
 static constexpr int SAME_PRESS = 1 << 2;
 static constexpr int SAME_GAS = 1 << 3;
-
-static bool same_cylinder_with_flags(const cylinder_t &cyl1, const cylinder_t &cyl2, int sameCylinderFlags)
-{
-	return (((sameCylinderFlags & SAME_TYPE)  == 0 || same_cylinder_type(cyl1, cyl2)) &&
-		((sameCylinderFlags & SAME_SIZE)  == 0 || same_cylinder_size(cyl1, cyl2)) &&
-		((sameCylinderFlags & SAME_PRESS) == 0 || same_cylinder_pressure(cyl1, cyl2)) &&
-		((sameCylinderFlags & SAME_GAS)   == 0 || same_gasmix(cyl1.gasmix, cyl2.gasmix)));
-}
-
-static int find_cylinder_index(const struct dive *d, const cylinder_t &cyl, int sameCylinderFlags)
-{
-	for (int idx = 0; idx < d->cylinders.nr; ++idx) {
-		if (same_cylinder_with_flags(cyl, *get_cylinder(d, idx), sameCylinderFlags))
-			return idx;
-	}
-	return -1;
-}
 
 EditCylinderBase::EditCylinderBase(int index, bool currentDiveOnly, bool nonProtectedOnly, int sameCylinderFlags) :
 	EditDivesBase(currentDiveOnly)
@@ -1222,12 +1200,24 @@ EditCylinderBase::EditCylinderBase(int index, bool currentDiveOnly, bool nonProt
 	cyl.reserve(dives.size());
 
 	for (dive *d: dives) {
-		int idx = d == current ? index : find_cylinder_index(d, orig, sameCylinderFlags);
-		if (idx < 0 || (nonProtectedOnly && is_cylinder_prot(d, idx)))
+		if (index >= d->cylinders.nr)
 			continue;
+		if (nonProtectedOnly && is_cylinder_prot(d, index))
+			continue;
+		// We checked that the cylinder exists above.
+		const cylinder_t &cylinder = *get_cylinder(d, index);
+		if (d != current &&
+		    (!same_cylinder_size(orig, cylinder) || !same_cylinder_type(orig, cylinder))) {
+			// when editing cylinders, we assume that the user wanted to edit the 'n-th' cylinder
+			// and we only do edit that cylinder, if it was the same type as the one in the current dive
+			continue;
+		}
+
 		divesNew.push_back(d);
-		indexes.push_back(idx);
-		cyl.push_back(clone_cylinder(*get_cylinder(d, idx)));
+		// that's silly as it's always the same value - but we need this vector of indices in the case where we add
+		// a cylinder to several dives as the spot will potentially be different in different dives
+		indexes.push_back(index);
+		cyl.push_back(clone_cylinder(cylinder));
 	}
 	dives = std::move(divesNew);
 }
@@ -1361,8 +1351,8 @@ void EditCylinder::undo()
 	redo();
 }
 
-EditSensors::EditSensors(int toCylinderIn, int fromCylinderIn)
-	: d(current_dive), dc(get_dive_dc(d, dc_number)), toCylinder(toCylinderIn), fromCylinder(fromCylinderIn)
+EditSensors::EditSensors(int toCylinderIn, int fromCylinderIn, int dcNr)
+	: d(current_dive), dc(get_dive_dc(d, dcNr)), toCylinder(toCylinderIn), fromCylinder(fromCylinderIn)
 {
 	if (!d || !dc)
 		return;
@@ -1377,6 +1367,9 @@ void EditSensors::mapSensors(int toCyl, int fromCyl)
 		for (int s = 0; s < MAX_SENSORS; ++s) {
 			if (dc->sample[i].pressure[s].mbar && dc->sample[i].sensor[s] == fromCyl)
 				dc->sample[i].sensor[s] = toCyl;
+			// In case the cylinder we are moving to has a sensor attached, move it to the other cylinder
+			else if (dc->sample[i].pressure[s].mbar && dc->sample[i].sensor[s] == toCyl)
+				dc->sample[i].sensor[s] = fromCyl;
 		}
 	}
 	emit diveListNotifier.diveComputerEdited(dc);
@@ -1515,8 +1508,8 @@ void EditDive::exchangeDives()
 	QVector<dive *> dives = { oldDive };
 	timestamp_t delta = oldDive->when - newDive->when;
 	if (delta != 0) {
-		sort_dive_table(&dive_table);
-		sort_trip_table(&trip_table);
+		sort_dive_table(divelog.dives);
+		sort_trip_table(divelog.trips);
 		if (newDive->divetrip != oldDive->divetrip)
 			qWarning("Command::EditDive::redo(): This command does not support moving between trips!");
 		if (oldDive->divetrip)
@@ -1528,7 +1521,7 @@ void EditDive::exchangeDives()
 	emit diveListNotifier.divesChanged(dives, changedFields);
 
 	// Select the changed dives
-	setSelection( { oldDive }, oldDive);
+	setSelection( { oldDive }, oldDive, -1);
 }
 
 void EditDive::editDs()

@@ -43,6 +43,8 @@ public:
 		DIVEGUIDE,
 		COUNTRY,
 		LOCATION,
+		NOTES,
+		DIVEMODE,
 		COLUMNS
 	};
 
@@ -77,14 +79,16 @@ protected slots:
 	void reset();
 signals:
 	// The propagation of selection changes is complex.
-	// The control flow of dive-selection goes:
-	// Commands/DiveListNotifier ---(dive */dive_trip *)---> DiveTripModel ---(QModelIndex)---> DiveListView
+	// The control flow of programmatical dive-selection goes:
+	// Commands/DiveListNotifier ---(dive */dive_trip *)---> DiveTripModel
+	//			     ---(QModelIndex)---> MultiFilterSortModel
+	//			     ---(QModelIndex)---> DiveListView
 	// i.e. The command objects send changes in terms of pointer-to-dives, which the DiveTripModel transforms
-	// into QModelIndexes according to the current view (tree/list). Finally, the DiveListView transforms these
-	// indices into local indices according to current sorting/filtering and instructs the QSelectionModel to
+	// into QModelIndexes according to the current view (tree/list). These are modified according to current
+	// filtering/sorting. Finally, the DiveListView instructs the QSelectionModel to
 	// perform the appropriate actions.
-	void selectionChanged(const QVector<QModelIndex> &indices);
-	void currentDiveChanged(QModelIndex index);
+	void divesSelected(const QVector<QModelIndex> &indices, QModelIndex currentDive, int currentDC); // currentDC < 0 -> keep DC.
+	void tripSelected(QModelIndex trip, QModelIndex currentDive);
 protected:
 	dive *oldCurrent;
 	QBrush invalidForeground;
@@ -96,7 +100,7 @@ protected:
 	static QString tripTitle(const dive_trip *trip);
 	static QString tripShortDate(const dive_trip *trip);
 	static QString getDescription(int column);
-	void currentChanged();
+	void currentChanged(dive *currentDive);
 
 	virtual dive *diveOrNull(const QModelIndex &index) const = 0;	// Returns a dive if this index represents a dive, null otherwise
 	virtual void clearData() = 0;
@@ -115,7 +119,8 @@ public slots:
 	void divesChanged(const QVector<dive *> &dives);
 	void diveChanged(dive *d);
 	void divesTimeChanged(timestamp_t delta, const QVector<dive *> &dives);
-	void divesSelected(const QVector<dive *> &dives);
+	void divesSelectedSlot(const QVector<dive *> &dives, dive *currentDive, int currentDC);
+	void tripSelected(dive_trip *trip, dive *currentDive);
 	void tripChanged(dive_trip *trip, TripField);
 	void filterReset();
 
@@ -193,7 +198,8 @@ public slots:
 	void divesTimeChanged(timestamp_t delta, const QVector<dive *> &dives);
 	// Does nothing in list view.
 	//void divesMovedBetweenTrips(dive_trip *from, dive_trip *to, bool deleteFrom, bool createTo, const QVector<dive *> &dives);
-	void divesSelected(const QVector<dive *> &dives);
+	void divesSelectedSlot(const QVector<dive *> &dives, dive *currentDive, int currentDC);
+	void tripSelected(dive_trip *trip, dive *currentDive);
 	void filterReset();
 
 public:

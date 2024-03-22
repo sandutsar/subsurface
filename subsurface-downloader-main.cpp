@@ -8,10 +8,12 @@
 #include "core/settings/qPref.h"
 #include "core/tag.h"
 #include "core/dive.h"
+#include "core/divelog.h"
 #include "core/subsurface-string.h"
 #include "core/file.h"
 #include "core/trip.h"
 #include "core/libdivecomputer.h"
+#include "commands/command.h"
 
 #include <QApplication>
 #include <QLoggingCategory>
@@ -24,6 +26,7 @@ extern void cliDownloader(const char *vendor, const char *product, const char *d
 
 int main(int argc, char **argv)
 {
+	Command::init();
 	qInstallMessageHandler(messageHandler);
 	// we always run this in verbose mode as there is no UI
 	verbose = 1;
@@ -40,16 +43,11 @@ int main(int argc, char **argv)
 	QStringList files;
 	QStringList importedFiles;
 	QStringList arguments = QCoreApplication::arguments();
-	struct dive_table dive_table = empty_dive_table;
-	struct dive_site_table sites = empty_dive_site_table;
-	struct device_table devices;
-	struct filter_preset_table presets;
 
 	// set a default logfile name for libdivecomputer so we always get a logfile
 	logfile_name = strdup("subsurface-downloader.log");
 
 	const char *default_directory = system_default_directory();
-	const char *default_filename = system_default_filename();
 	subsurface_mkdir(default_directory);
 
 	if (subsurface_user_is_root() && !force_root) {
@@ -95,7 +93,10 @@ int main(int argc, char **argv)
 	filesOnCommandLine = !files.isEmpty() || !importedFiles.isEmpty();
 	if (!files.isEmpty()) {
 		qDebug() << "loading dive data from" << files;
-		parse_file(qPrintable(files.first()), &dive_table, &trip_table, &sites, &devices, &presets);
+		if (parse_file(qPrintable(files.first()), &divelog) < 0) {
+			printf("Failed to load dives from file '%s', aborting.\n", qPrintable(files.first()));
+			exit(1);
+		}
 	}
 	print_files();
 	if (!quit) {
@@ -105,11 +106,17 @@ int main(int argc, char **argv)
 			cliDownloader(prefs.dive_computer.vendor, prefs.dive_computer.product, prefs.dive_computer.device);
 		}
 	}
-	save_dives(qPrintable(files.first()));
+	if (!files.isEmpty()) {
+		qDebug() << "saving dive data to" << files;
+		save_dives(qPrintable(files.first()));
+	}
+	else {
+		printf("No log files given, not saving dive data.\n");
+		printf("Give a log file name as argument, or configure a cloud URL.\n");
+	}
+	clear_divelog(&divelog);
 	taglist_free(g_tag_list);
 	parse_xml_exit();
-	free((void *)default_directory);
-	free((void *)default_filename);
 
 	// Sync struct preferences to disk
 	qPref::sync();

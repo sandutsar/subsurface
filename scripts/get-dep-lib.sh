@@ -12,10 +12,10 @@ CURRENT_LIBSSH2="libssh2-1.8.0"
 CURRENT_XSLT="v1.1.34"
 CURRENT_SQLITE="3190200"
 CURRENT_LIBXML2="v2.9.4"
-CURRENT_LIBFTDI="1.3"
+CURRENT_LIBFTDI="abd19b721f7e9b4d514ed319ece173ebc7b1ea72"
 CURRENT_KIRIGAMI="v5.76.0"
 CURRENT_BREEZE_ICONS="4daac191fb33c8c03bba8356db9767816cb8ee02"
-CURRENT_MDBTOOLS="master"
+CURRENT_MDBTOOLS="v1.0.0"
 CURRENT_QT_ANDROID_CMAKE="master"
 CURRENT_LIBMTP="master"
 
@@ -104,7 +104,7 @@ fi
 # FIX FOR ANDROID,
 if [ "$PLATFORM" == "singleAndroid" ] ; then
 	CURRENT_OPENSSL="OpenSSL_1_1_1m"
-# If changing the openSSL version here, make sure to change it in packaging/android/variables.sh also.
+# If changing the openSSL version here, make sure to change it in scripts/docker/android-build-container/variables.sh also.
 fi
 # no curl and old libs (never version breaks)
 # check whether to use curl or wget
@@ -190,13 +190,13 @@ for package in "${PACKAGES[@]}" ; do
 			git_checkout_library libzip $CURRENT_LIBZIP https://github.com/nih-at/libzip.git
 			;;
 		libftdi1)
-			curl_download_library libftdi1 https://www.intra2net.com/en/developer/libftdi/download/ libftdi1-${CURRENT_LIBFTDI}.tar.bz2
+			git_checkout_library libftdi1 $CURRENT_LIBFTDI git://developer.intra2net.com/libftdi
 			;;
 		sqlite)
 			curl_download_library sqlite https://www.sqlite.org/2017/ sqlite-autoconf-${CURRENT_SQLITE}.tar.gz
 			;;
 		mdbtools)
-			git_checkout_library mdbtools $CURRENT_MDBTOOLS https://github.com/brianb/mdbtools.git
+			git_checkout_library mdbtools $CURRENT_MDBTOOLS https://github.com/mdbtools/mdbtools.git
 			;;
 		qt-android-cmake)
 			git_checkout_library qt-android-cmake $CURRENT_QT_ANDROID_CMAKE https://github.com/LaurentGomila/qt-android-cmake.git

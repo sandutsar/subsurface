@@ -2,6 +2,7 @@
 
 #include "divefilter.h"
 #include "divelist.h"
+#include "divelog.h"
 #include "gettextfromc.h"
 #include "qthelper.h"
 #include "selection.h"
@@ -14,7 +15,7 @@
 #endif
 
 // Set filter status of dive and return whether it has been changed
-bool DiveFilter::setFilterStatus(struct dive *d, bool shown) const
+bool DiveFilter::setFilterStatus(struct dive *d, bool shown, std::vector<dive *> &removeFromSelection) const
 {
 	bool old_shown, changed;
 	if (!d)
@@ -22,16 +23,16 @@ bool DiveFilter::setFilterStatus(struct dive *d, bool shown) const
 	old_shown = !d->hidden_by_filter;
 	d->hidden_by_filter = !shown;
 	if (!shown && d->selected)
-		deselect_dive(d);
+		removeFromSelection.push_back(d);
 	changed = old_shown != shown;
 	if (changed)
 		shown_dives += shown - old_shown;
 	return changed;
 }
 
-void DiveFilter::updateDiveStatus(dive *d, bool newStatus, ShownChange &change) const
+void DiveFilter::updateDiveStatus(dive *d, bool newStatus, ShownChange &change, std::vector<dive *> &removeFromSelection) const
 {
-	if (setFilterStatus(d, newStatus)) {
+	if (setFilterStatus(d, newStatus, removeFromSelection)) {
 		if (newStatus)
 			change.newShown.push_back(d);
 		else
@@ -53,19 +54,20 @@ bool FilterData::validFilter() const
 
 ShownChange DiveFilter::update(const QVector<dive *> &dives) const
 {
-	dive *old_current = current_dive;
-
 	ShownChange res;
 	bool doDS = diveSiteMode();
 	bool doFullText = filterData.fullText.doit();
+	std::vector<dive *> selection = getDiveSelection();
+	std::vector<dive *> removeFromSelection;
 	for (dive *d: dives) {
 		// There are three modes: divesite, fulltext, normal
 		bool newStatus = doDS        ? dive_sites.contains(d->dive_site) :
 				 doFullText  ? fulltext_dive_matches(d, filterData.fullText, filterData.fulltextStringMode) && showDive(d) :
 					       showDive(d);
-		updateDiveStatus(d, newStatus, res);
+		updateDiveStatus(d, newStatus, res, removeFromSelection);
 	}
-	res.currentChanged = old_current != current_dive;
+	updateSelection(selection, std::vector<dive *>(), removeFromSelection);
+	res.currentChanged = setSelectionKeepCurrent(selection);
 	return res;
 }
 
@@ -73,7 +75,7 @@ void DiveFilter::reset()
 {
 	int i;
 	dive *d;
-	shown_dives = dive_table.nr;
+	shown_dives = divelog.dives->nr;
 	for_each_dive(i, d)
 		d->hidden_by_filter = false;
 	updateAll();
@@ -81,30 +83,31 @@ void DiveFilter::reset()
 
 ShownChange DiveFilter::updateAll() const
 {
-	dive *old_current = current_dive;
-
 	ShownChange res;
 	int i;
 	dive *d;
+	std::vector<dive *> selection = getDiveSelection();
+	std::vector<dive *> removeFromSelection;
 	// There are three modes: divesite, fulltext, normal
 	if (diveSiteMode()) {
 		for_each_dive(i, d) {
 			bool newStatus = dive_sites.contains(d->dive_site);
-			updateDiveStatus(d, newStatus, res);
+			updateDiveStatus(d, newStatus, res, removeFromSelection);
 		}
 	} else if (filterData.fullText.doit()) {
 		FullTextResult ft = fulltext_find_dives(filterData.fullText, filterData.fulltextStringMode);
 		for_each_dive(i, d) {
 			bool newStatus = ft.dive_matches(d) && showDive(d);
-			updateDiveStatus(d, newStatus, res);
+			updateDiveStatus(d, newStatus, res, removeFromSelection);
 		}
 	} else {
 		for_each_dive(i, d) {
 			bool newStatus = showDive(d);
-			updateDiveStatus(d, newStatus, res);
+			updateDiveStatus(d, newStatus, res, removeFromSelection);
 		}
 	}
-	res.currentChanged = old_current != current_dive;
+	updateSelection(selection, std::vector<dive *>(), removeFromSelection);
+	res.currentChanged = setSelectionKeepCurrent(selection);
 	return res;
 }
 
@@ -142,13 +145,13 @@ bool DiveFilter::showDive(const struct dive *d) const
 void DiveFilter::startFilterDiveSites(QVector<dive_site *> ds)
 {
 	if (++diveSiteRefCount > 1) {
-		setFilterDiveSite(ds);
+		setFilterDiveSite(std::move(ds));
 	} else {
 		std::sort(ds.begin(), ds.end());
-		dive_sites = ds;
+		dive_sites = std::move(ds);
 		// When switching into dive site mode, reload the dive sites.
 		// TODO: why here? why not catch the filterReset signal in the map widget
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+#ifdef MAP_SUPPORT
 		MapWidget::instance()->reload();
 #endif
 		emit diveListNotifier.filterReset();
@@ -161,7 +164,7 @@ void DiveFilter::stopFilterDiveSites()
 		return;
 	dive_sites.clear();
 	emit diveListNotifier.filterReset();
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+#ifdef MAP_SUPPORT
 	MapWidget::instance()->reload();
 #endif
 }
@@ -173,12 +176,11 @@ void DiveFilter::setFilterDiveSite(QVector<dive_site *> ds)
 	std::sort(ds.begin(), ds.end());
 	if (ds == dive_sites)
 		return;
-	dive_sites = ds;
+	dive_sites = std::move(ds);
 
 	emit diveListNotifier.filterReset();
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+#ifdef MAP_SUPPORT
 	MapWidget::instance()->setSelected(dive_sites);
-	MapWidget::instance()->selectionChanged();
 #endif
 	MainWindow::instance()->diveList->expandAll();
 }
@@ -201,10 +203,11 @@ bool DiveFilter::diveSiteMode() const
 
 QString DiveFilter::shownText() const
 {
+	int num = divelog.dives->nr;
 	if (diveSiteMode() || filterData.validFilter())
-		return gettextFromC::tr("%L1/%L2 shown").arg(shown_dives).arg(dive_table.nr);
+		return gettextFromC::tr("%L1/%L2 shown").arg(shown_dives).arg(num);
 	else
-		return gettextFromC::tr("%L1 dives").arg(dive_table.nr);
+		return gettextFromC::tr("%L1 dives").arg(num);
 }
 
 int DiveFilter::shownDives() const

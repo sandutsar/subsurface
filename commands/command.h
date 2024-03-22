@@ -2,17 +2,23 @@
 #ifndef COMMAND_H
 #define COMMAND_H
 
-#include "core/dive.h"
+#include "core/divelog.h"
+#include "core/equipment.h"
 #include "core/pictureobj.h"
 #include "core/taxonomy.h"
 #include <QVector>
 #include <QAction>
 #include <vector>
 
+struct divecomputer;
+struct divelog;
+struct dive_components;
+struct dive_site;
+struct dive_trip;
+struct event;
 struct DiveAndLocation;
 struct FilterData;
 struct filter_preset_table;
-struct device_table;
 
 // We put everything in a namespace, so that we can shorten names without polluting the global namespace
 namespace Command {
@@ -24,8 +30,8 @@ void clear();				// Reset the undo stack. Delete all commands.
 void setClean();			// Call after save - this marks a state where no changes need to be saved.
 bool isClean();				// Any changes need to be saved?
 QAction *undoAction(QObject *parent);	// Create an undo action.
-QAction *redoAction(QObject *parent);	// Create an redo action.
-QString changesMade();			// return a string with the texts from all commands on the undo stack -> for commit message
+QAction *redoAction(QObject *parent);	// Create a redo action.
+QString changesMade();			// Return a string with the texts from all commands on the undo stack -> for commit message.
 bool placingCommand();			// Currently executing a new command -> might not have to update the field the user just edited.
 
 // 2) Dive-list related commands
@@ -35,10 +41,7 @@ bool placingCommand();			// Currently executing a new command -> might not have 
 // If newNumber is true, the dive is assigned a new number, depending on the
 // insertion position.
 void addDive(dive *d, bool autogroup, bool newNumber);
-void importDives(struct dive_table *dives, struct trip_table *trips,
-		 struct dive_site_table *sites, struct device_table *devices,
-		 struct filter_preset_table *filter_presets,
-		 int flags, const QString &source); // The tables are consumed!
+void importDives(struct divelog *log, int flags, const QString &source); // The tables are consumed!
 void deleteDive(const QVector<struct dive*> &divesToDelete);
 void shiftTime(const std::vector<dive *> &changedDives, int amount);
 void renumberDives(const QVector<QPair<dive *, int>> &divesToRenumber);
@@ -99,7 +102,7 @@ enum class EditProfileType {
 	MOVE,
 };
 void replanDive(dive *d); // dive computer(s) and cylinder(s) of first argument will be consumed!
-void editProfile(const dive *d, EditProfileType type, int count);
+void editProfile(const dive *d, int dcNr, EditProfileType type, int count);
 int addWeight(bool currentDiveOnly);
 int removeWeight(int index, bool currentDiveOnly);
 int editWeight(int index, weightsystem_t ws, bool currentDiveOnly);
@@ -111,7 +114,7 @@ enum class EditCylinderType {
 	GASMIX
 };
 int editCylinder(int index, cylinder_t cyl, EditCylinderType type, bool currentDiveOnly);
-void editSensors(int toCylinder, const int fromCylinder);
+void editSensors(int toCylinder, int fromCylinder, int dcNr);
 #ifdef SUBSURFACE_MOBILE
 // Edits a dive and creates a divesite (if createDs != NULL) or edits a divesite (if changeDs != NULL).
 // Takes ownership of newDive and createDs!

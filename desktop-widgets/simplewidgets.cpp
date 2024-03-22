@@ -87,14 +87,7 @@ void ShiftTimesDialog::buttonClicked(QAbstractButton *button)
 		if (ui.backwards->isChecked())
 			amount *= -1;
 		if (amount != 0)
-			Command::shiftTime(getDiveSelection(), amount);
-	}
-
-	ui.timeEdit->setTime(QTime(0, 0, 0, 0));
-	dive *d = first_selected_dive();
-	if (d) {
-		ui.currentTime->setText(get_dive_date_string(d->when));
-		ui.shiftedTime->setText(get_dive_date_string(d->when));
+			Command::shiftTime(dives, amount);
 	}
 }
 
@@ -109,8 +102,8 @@ void ShiftTimesDialog::changeTime()
 	ui.shiftedTime->setText(get_dive_date_string(amount + when));
 }
 
-ShiftTimesDialog::ShiftTimesDialog(QWidget *parent) : QDialog(parent),
-	when(0)
+ShiftTimesDialog::ShiftTimesDialog(std::vector<dive *> dives_in, QWidget *parent) : QDialog(parent),
+	when(0), dives(std::move(dives_in))
 {
 	ui.setupUi(this);
 	connect(ui.buttonBox, SIGNAL(clicked(QAbstractButton *)), this, SLOT(buttonClicked(QAbstractButton *)));
@@ -120,6 +113,9 @@ ShiftTimesDialog::ShiftTimesDialog(QWidget *parent) : QDialog(parent),
 	connect(close, SIGNAL(activated()), this, SLOT(close()));
 	QShortcut *quit = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Q), this);
 	connect(quit, SIGNAL(activated()), parent, SLOT(close()));
+	when = dives[0]->when;
+	ui.currentTime->setText(get_dive_date_string(when));
+	ui.shiftedTime->setText(get_dive_date_string(when));
 }
 
 void ShiftImageTimesDialog::syncCameraClicked()
@@ -279,22 +275,7 @@ URLDialog::URLDialog(QWidget *parent) : QDialog(parent)
 
 QString URLDialog::url() const
 {
-	return ui.urlField->text();
-}
-
-bool isGnome3Session()
-{
-#if defined(QT_OS_WIW) || defined(QT_OS_MAC)
-	return false;
-#else
-	if (qApp->style()->objectName() != "gtk+")
-		return false;
-	QProcess p;
-	p.start("pidof", QStringList() << "gnome-shell");
-	p.waitForFinished(-1);
-	QString p_stdout = p.readAllStandardOutput();
-	return !p_stdout.isEmpty();
-#endif
+	return ui.urlField->toPlainText();
 }
 
 #define COMPONENT_FROM_UI(_component) what->_component = ui._component->isChecked()
@@ -316,11 +297,11 @@ DiveComponentSelection::DiveComponentSelection(QWidget *parent, struct dive *tar
 	UI_FROM_COMPONENT(weights);
 	UI_FROM_COMPONENT(number);
 	UI_FROM_COMPONENT(when);
-	connect(ui.buttonBox, SIGNAL(clicked(QAbstractButton *)), this, SLOT(buttonClicked(QAbstractButton *)));
+	connect(ui.buttonBox, &QDialogButtonBox::clicked, this, &DiveComponentSelection::buttonClicked);
 	QShortcut *close = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_W), this);
-	connect(close, SIGNAL(activated()), this, SLOT(close()));
+	connect(close, &QShortcut::activated, this, &DiveComponentSelection::close);
 	QShortcut *quit = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Q), this);
-	connect(quit, SIGNAL(activated()), parent, SLOT(close()));
+	connect(quit, &QShortcut::activated, parent, &QWidget::close);
 }
 
 void DiveComponentSelection::buttonClicked(QAbstractButton *button)
@@ -404,7 +385,7 @@ AddFilterPresetDialog::AddFilterPresetDialog(const QString &defaultName, QWidget
 	int count = filter_presets_count();
 	presets.reserve(count);
 	for (int i = 0; i < count; ++i)
-		presets.push_back(filter_preset_name_qstring(i));
+		presets.push_back(QString(filter_preset_name(i).c_str()));
 	QCompleter *completer = new QCompleter(presets, this);
 	completer->setCaseSensitivity(Qt::CaseInsensitive);
 	ui.name->setCompleter(completer);
@@ -414,7 +395,7 @@ void AddFilterPresetDialog::nameChanged(const QString &text)
 {
 	QString trimmed = text.trimmed();
 	bool isEmpty = trimmed.isEmpty();
-	bool exists = !isEmpty && filter_preset_id(trimmed) >= 0;
+	bool exists = !isEmpty && filter_preset_id(trimmed.toStdString()) >= 0;
 	ui.duplicateWarning->setVisible(exists);
 	ui.buttonBox->button(QDialogButtonBox::Ok)->setEnabled(!isEmpty);
 }
@@ -534,7 +515,7 @@ QString TextHyperlinkEventFilter::tryToFormulateUrl(QTextCursor *cursor)
 		maybeUrlStr = left + right;
 	}
 
-	return stringMeetsOurUrlRequirements(maybeUrlStr) ? maybeUrlStr : QString();
+	return stringMeetsOurUrlRequirements(maybeUrlStr) ? std::move(maybeUrlStr) : QString();
 }
 
 QString TextHyperlinkEventFilter::fromCursorTilWhitespace(QTextCursor *cursor, bool searchBackwards)

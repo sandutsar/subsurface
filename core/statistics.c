@@ -2,13 +2,13 @@
 /* statistics.c
  *
  * core logic for the Info & Stats page -
- * char *get_minutes(int seconds);
  * void calculate_stats_summary(struct stats_summary *out, bool selected_only);
  * void calculate_stats_selected(stats_t *stats_selection);
  */
 
 #include "statistics.h"
 #include "dive.h"
+#include "divelog.h"
 #include "event.h"
 #include "gettext.h"
 #include "sample.h"
@@ -84,13 +84,6 @@ static void process_dive(struct dive *dive, stats_t *stats)
 	}
 }
 
-char *get_minutes(int seconds)
-{
-	static char buf[80];
-	snprintf(buf, sizeof(buf), "%d:%.2d", FRACTION(seconds, 60));
-	return buf;
-}
-
 /*
  * Calculate a summary of the statistics and put in the stats_summary
  * structure provided in the first parameter.
@@ -113,17 +106,17 @@ void calculate_stats_summary(struct stats_summary *out, bool selected_only)
 	size_t size, tsize, dsize, tmsize;
 	stats_t stats = { 0 };
 
-	if (dive_table.nr > 0) {
-		stats.shortest_time.seconds = dive_table.dives[0]->duration.seconds;
-		stats.min_depth.mm = dive_table.dives[0]->maxdepth.mm;
-		stats.selection_size = dive_table.nr;
+	if (divelog.dives->nr > 0) {
+		stats.shortest_time.seconds = divelog.dives->dives[0]->duration.seconds;
+		stats.min_depth.mm = divelog.dives->dives[0]->maxdepth.mm;
+		stats.selection_size = divelog.dives->nr;
 	}
 
 	/* allocate sufficient space to hold the worst
 	 * case (one dive per year or all dives during
 	 * one month) for yearly and monthly statistics*/
 
-	size = sizeof(stats_t) * (dive_table.nr + 1);
+	size = sizeof(stats_t) * (divelog.dives->nr + 1);
 	tsize = sizeof(stats_t) * (NUM_DIVEMODE + 1);
 	dsize = sizeof(stats_t) * ((STATS_MAX_DEPTH / STATS_DEPTH_BUCKET) + 1);
 	tmsize = sizeof(stats_t) * ((STATS_MAX_TEMP / STATS_TEMP_BUCKET) + 1);
@@ -324,12 +317,6 @@ bool has_gaschange_event(const struct dive *dive, const struct divecomputer *dc,
 			return true;
 		event = get_next_event(event->next, "gaschange");
 	}
-	if (dc->divemode == CCR) {
-		if (idx == get_cylinder_idx_by_use(dive, DILUENT))
-			return true;
-		if (idx == get_cylinder_idx_by_use(dive, OXYGEN))
-			return true;
-	}
 	return !first_gas_explicit && idx == 0;
 }
 
@@ -349,6 +336,8 @@ bool is_cylinder_used(const struct dive *dive, int idx)
 
 	for_each_dc(dive, dc) {
 		if (has_gaschange_event(dive, dc, idx))
+			return true;
+		else if (dc->divemode == CCR && idx == get_cylinder_idx_by_use(dive, OXYGEN))
 			return true;
 	}
 	return false;

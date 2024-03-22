@@ -1,6 +1,8 @@
 #include "string-format.h"
 #include "dive.h"
 #include "divesite.h"
+#include "event.h"
+#include "format.h"
 #include "qthelper.h"
 #include "subsurface-string.h"
 #include "trip.h"
@@ -261,10 +263,31 @@ QString formatDiveDateTime(const dive *d)
 					   localTime.time().toString(prefs.time_format));
 }
 
+QString formatDiveGasString(const dive *d)
+{
+	int o2, he, o2max;
+	get_dive_gas(d, &o2, &he, &o2max);
+	o2 = (o2 + 5) / 10;
+	he = (he + 5) / 10;
+	o2max = (o2max + 5) / 10;
+
+	if (he) {
+		if (o2 == o2max)
+			return qasprintf_loc("%d/%d", o2, he);
+		else
+			return qasprintf_loc("%d/%d…%d%%", o2, he, o2max);
+	} else if (o2) {
+		if (o2 == o2max)
+			return qasprintf_loc("%d%%", o2);
+		else
+			return qasprintf_loc("%d…%d%%", o2, o2max);
+	} else {
+		return gettextFromC::tr("air");
+	}
+}
+
 QString formatDayOfWeek(int day)
 {
-	// I can't wrap my head around the fact that Sunday is the
-	// first day of the week, but that's how it is.
 	switch (day) {
 	default:
 	case 0:	return gettextFromC::tr("Sunday");
@@ -275,6 +298,11 @@ QString formatDayOfWeek(int day)
 	case 5:	return gettextFromC::tr("Friday");
 	case 6:	return gettextFromC::tr("Saturday");
 	}
+}
+
+QString formatMinutes(int seconds)
+{
+	return QString::asprintf("%d:%.2d", FRACTION(seconds, 60));
 }
 
 QString formatTripTitle(const dive_trip *trip)

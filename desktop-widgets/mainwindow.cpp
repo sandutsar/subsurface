@@ -19,6 +19,7 @@
 
 #include "core/color.h"
 #include "core/device.h"
+#include "core/divelog.h"
 #include "core/divesitehelpers.h"
 #include "core/errorhelper.h"
 #include "core/file.h"
@@ -27,6 +28,7 @@
 #include "core/import-csv.h"
 #include "core/planner.h"
 #include "core/qthelper.h"
+#include "core/selection.h"
 #include "core/subsurface-string.h"
 #include "core/trip.h"
 #include "core/version.h"
@@ -39,8 +41,9 @@
 #include "desktop-widgets/divelistview.h"
 #include "desktop-widgets/divelogexportdialog.h"
 #include "desktop-widgets/divelogimportdialog.h"
-#include "desktop-widgets/divesiteimportdialog.h"
 #include "desktop-widgets/diveplanner.h"
+#include "desktop-widgets/divesiteimportdialog.h"
+#include "desktop-widgets/divesitelistview.h"
 #include "desktop-widgets/downloadfromdivecomputer.h"
 #include "desktop-widgets/findmovedimagesdialog.h"
 #include "desktop-widgets/locationinformation.h"
@@ -111,7 +114,7 @@ extern "C" void showErrorFromC(char *buf)
 	emit MainWindow::instance()->showError(error);
 }
 
-MainWindow::MainWindow() : QMainWindow(),
+MainWindow::MainWindow() :
 	appState((ApplicationState)-1), // Invalid state
 	actionNextDive(nullptr),
 	actionPreviousDive(nullptr),
@@ -134,11 +137,12 @@ MainWindow::MainWindow() : QMainWindow(),
 	// for the "default" mode
 	mainTab.reset(new MainTab);
 	diveList.reset(new DiveListView);
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+#ifdef MAP_SUPPORT
 	mapWidget.reset(MapWidget::instance()); // Yes, this is ominous see comment in mapwidget.cpp.
 #endif
 	plannerWidgets.reset(new PlannerWidgets);
 	statistics.reset(new StatsWidget);
+	diveSites.reset(new DiveSiteListView);
 	profile.reset(new ProfileWidget);
 
 	diveSiteEdit.reset(new LocationInformationWidget);
@@ -147,14 +151,14 @@ MainWindow::MainWindow() : QMainWindow(),
 								    { diveList.get(), FLAG_NONE }, { mapWidget.get(), FLAG_NONE } });
 	registerApplicationState(ApplicationState::PlanDive, { false, { &plannerWidgets->plannerWidget, FLAG_NONE },         { profile.get(), FLAG_NONE },
 								      { &plannerWidgets->plannerSettingsWidget, FLAG_NONE }, { &plannerWidgets->plannerDetails, FLAG_NONE } });
-	registerApplicationState(ApplicationState::EditPlannedDive, { true, { &plannerWidgets->plannerWidget, FLAG_NONE }, { profile.get(), FLAG_NONE },
-									    { diveList.get(), FLAG_NONE },                 { mapWidget.get(), FLAG_NONE } });
 	registerApplicationState(ApplicationState::EditDiveSite, { false, { diveSiteEdit.get(), FLAG_NONE }, { profile.get(), FLAG_DISABLED },
 									  { diveList.get(), FLAG_DISABLED }, { mapWidget.get(), FLAG_NONE } });
 	registerApplicationState(ApplicationState::FilterDive, { true, { mainTab.get(), FLAG_NONE },  { profile.get(), FLAG_NONE },
 								       { diveList.get(), FLAG_NONE }, { &filterWidget, FLAG_NONE } });
 	registerApplicationState(ApplicationState::Statistics, { true, { statistics.get(), FLAG_NONE }, { nullptr, FLAG_NONE },
 								       { diveList.get(), FLAG_DISABLED },   { &filterWidget, FLAG_NONE } });
+	registerApplicationState(ApplicationState::DiveSites, { false, { diveSites.get(), FLAG_NONE },  { profile.get(), FLAG_NONE },
+								       { diveList.get(), FLAG_NONE }, { mapWidget.get(), FLAG_NONE } });
 	registerApplicationState(ApplicationState::MapMaximized, { true, { nullptr, FLAG_NONE }, { nullptr, FLAG_NONE },
 									 { nullptr, FLAG_NONE }, { mapWidget.get(), FLAG_NONE } });
 	registerApplicationState(ApplicationState::ProfileMaximized, { true, { nullptr, FLAG_NONE }, { profile.get(), FLAG_NONE },
@@ -170,7 +174,7 @@ MainWindow::MainWindow() : QMainWindow(),
 	if (!QIcon::hasThemeIcon("window-close")) {
 		QIcon::setThemeName("subsurface");
 	}
-	connect(diveList.get(), &DiveListView::divesSelected, this, &MainWindow::selectionChanged);
+	connect(diveList.get(), &DiveListView::divesSelected, this, &MainWindow::divesSelected);
 	connect(&diveListNotifier, &DiveListNotifier::settingsChanged, this, &MainWindow::readSettings);
 	for (int i = 0; i < NUM_RECENT_FILES; i++) {
 		actionsRecent[i] = new QAction(this);
@@ -200,9 +204,6 @@ MainWindow::MainWindow() : QMainWindow(),
 	initialUiSetup();
 	readSettings();
 	diveList->setFocus();
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-	MapWidget::instance()->reload();
-#endif
 	diveList->expand(diveList->model()->index(0, 0));
 	diveList->scrollTo(diveList->model()->index(0, 0), QAbstractItemView::PositionAtCenter);
 #ifdef NO_USERMANUAL
@@ -281,6 +282,7 @@ void MainWindow::editDiveSite(dive_site *ds)
 	if (!ds)
 		return;
 	diveSiteEdit->initFields(ds);
+	state_stack.push_back(appState);
 	setApplicationState(ApplicationState::EditDiveSite);
 }
 
@@ -294,14 +296,6 @@ void MainWindow::enableDisableCloudActions()
 {
 	ui.actionCloudstorageopen->setEnabled(prefs.cloud_verification_status == qPrefCloudStorage::CS_VERIFIED);
 	ui.actionCloudstoragesave->setEnabled(prefs.cloud_verification_status == qPrefCloudStorage::CS_VERIFIED);
-}
-
-void MainWindow::enableDisableOtherDCsActions()
-{
-	bool nr = number_of_computers(current_dive) > 1;
-	enableShortcuts();
-	ui.actionNextDC->setEnabled(nr);
-	ui.actionPreviousDC->setEnabled(nr);
 }
 
 void MainWindow::setDefaultState()
@@ -320,18 +314,28 @@ void MainWindow::refreshDisplay()
 	setApplicationState(ApplicationState::Default);
 	diveList->setEnabled(true);
 	diveList->setFocus();
-	ui.actionAutoGroup->setChecked(autogroup);
 }
 
-void MainWindow::selectionChanged()
+void MainWindow::updateAutogroup()
 {
-	mainTab->updateDiveInfo();
-	if (current_dive)
-		enableDisableOtherDCsActions();
-	profile->plotCurrentDive();
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-	MapWidget::instance()->selectionChanged();
-#endif
+	ui.actionAutoGroup->setChecked(divelog.autogroup);
+}
+
+void MainWindow::divesSelected(const std::vector<dive *> &selection, dive *currentDive, int currentDC)
+{
+	// We call plotDive first, so that the profile can decide which
+	// dive computer to plot. The plotted dive computer is then
+	// used for displaying data in the tab-widgets.
+	profile->plotDive(currentDive, currentDC);
+	mainTab->updateDiveInfo(selection, profile->d, profile->dc);
+
+	// Activate cursor keys to switch through DCs if there are more than one DC.
+	if (currentDive) {
+		bool nr = number_of_computers(current_dive) > 1;
+		enableShortcuts();
+		ui.actionNextDC->setEnabled(nr);
+		ui.actionPreviousDC->setEnabled(nr);
+	}
 }
 
 void MainWindow::on_actionNew_triggered()
@@ -411,18 +415,19 @@ void MainWindow::on_actionCloudstorageopen_triggered()
 
 	showProgressBar();
 	QByteArray fileNamePtr = QFile::encodeName(filename);
-	if (!parse_file(fileNamePtr.data(), &dive_table, &trip_table, &dive_site_table, &device_table, &filter_preset_table))
+	if (!parse_file(fileNamePtr.data(), &divelog))
 		setCurrentFile(fileNamePtr.data());
 	process_loaded_dives();
 	hideProgressBar();
 	refreshDisplay();
+	updateAutogroup();
 }
 
 // Return whether saving to cloud is OK. If it isn't, show an error return false.
 static bool saveToCloudOK()
 {
-	if (!dive_table.nr) {
-		report_error(qPrintable(gettextFromC::tr("Don't save an empty log to the cloud")));
+	if (!divelog.dives->nr) {
+		report_error("%s", qPrintable(gettextFromC::tr("Don't save an empty log to the cloud")));
 		return false;
 	}
 	return true;
@@ -481,7 +486,7 @@ void MainWindow::on_actionCloudOnline_triggered()
 			on_actionCloudstorageopen_triggered();
 		}
 		if (git_local_only)
-			report_error(qPrintable(tr("Failure taking cloud storage online")));
+			report_error("%s", qPrintable(tr("Failure taking cloud storage online")));
 	}
 
 	setTitle();
@@ -507,13 +512,9 @@ void MainWindow::closeCurrentFile()
 	clear_dive_file_data(); // this clears all the core data structures and resets the models
 	setCurrentFile(nullptr);
 	diveList->setSortOrder(DiveTripModelBase::NR, Qt::DescendingOrder);
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-	MapWidget::instance()->reload();
-#endif
 	if (!existing_filename)
 		setTitle();
 	disableShortcuts();
-	Command::setClean();
 }
 
 void MainWindow::updateCloudOnlineStatus()
@@ -547,8 +548,10 @@ void MainWindow::updateLastUsedDir(const QString &dir)
 void MainWindow::on_actionPrint_triggered()
 {
 #ifndef NO_PRINTING
-	bool in_planner = appState == ApplicationState::PlanDive || appState == ApplicationState::EditPlannedDive;
-	PrintDialog dlg(in_planner, this);
+	// When in planner, only print the planned dive.
+	dive *singleDive = appState == ApplicationState::PlanDive ? plannerWidgets->getDive()
+								  : nullptr;
+	PrintDialog dlg(singleDive, this);
 
 	dlg.exec();
 #endif
@@ -578,7 +581,7 @@ void MainWindow::enableShortcuts()
 void MainWindow::showProfile()
 {
 	enableShortcuts();
-	profile->plotCurrentDive();
+	profile->plotDive(current_dive, profile->dc);
 	setApplicationState(ApplicationState::Default);
 }
 
@@ -633,8 +636,6 @@ bool MainWindow::plannerStateClean()
 
 void MainWindow::planCanceled()
 {
-	// while planning we might have modified the displayed_dive
-	// let's refresh what's shown on the profile
 	showProfile();
 	refreshDisplay();
 }
@@ -662,8 +663,9 @@ void MainWindow::on_actionReplanDive_triggered()
 	setApplicationState(ApplicationState::PlanDive);
 
 	disableShortcuts(true);
-	profile->setPlanState(&displayed_dive, 0);
-	plannerWidgets->replanDive();
+	plannerWidgets->prepareReplanDive(current_dive);
+	profile->setPlanState(plannerWidgets->getDive(), profile->dc);
+	plannerWidgets->replanDive(profile->dc);
 }
 
 void MainWindow::on_actionDivePlanner_triggered()
@@ -675,7 +677,8 @@ void MainWindow::on_actionDivePlanner_triggered()
 	setApplicationState(ApplicationState::PlanDive);
 
 	disableShortcuts(true);
-	profile->setPlanState(&displayed_dive, 0);
+	plannerWidgets->preparePlanDive(current_dive);
+	profile->setPlanState(plannerWidgets->getDive(), 0);
 	plannerWidgets->planDive();
 }
 
@@ -692,11 +695,11 @@ void MainWindow::on_actionAddDive_triggered()
 	d.dc.duration.seconds = 40 * 60;
 	d.dc.maxdepth.mm = M_OR_FT(15, 45);
 	d.dc.meandepth.mm = M_OR_FT(13, 39); // this creates a resonable looking safety stop
-	d.dc.model = strdup("manually added dive"); // don't translate! this is stored in the XML file
+	make_manually_added_dc(&d.dc);
 	fake_dc(&d.dc);
 	fixup_dive(&d);
 
-	Command::addDive(&d, autogroup, true);
+	Command::addDive(&d, divelog.autogroup, true);
 }
 
 void MainWindow::on_actionRenumber_triggered()
@@ -707,8 +710,8 @@ void MainWindow::on_actionRenumber_triggered()
 
 void MainWindow::on_actionAutoGroup_triggered()
 {
-	set_autogroup(ui.actionAutoGroup->isChecked());
-	if (autogroup)
+	divelog.autogroup = ui.actionAutoGroup->isChecked();
+	if (divelog.autogroup)
 		Command::autogroupDives();
 	else
 		Command::removeAutogenTrips();
@@ -764,6 +767,14 @@ void MainWindow::on_actionViewMap_triggered()
 	setApplicationState(ApplicationState::MapMaximized);
 }
 
+void MainWindow::on_actionViewDiveSites_triggered()
+{
+	if (!userMayChangeAppState())
+		return;
+	state_stack.push_back(appState);
+	setApplicationState(ApplicationState::DiveSites);
+}
+
 void MainWindow::on_actionViewAll_triggered()
 {
 	if (!userMayChangeAppState())
@@ -814,18 +825,16 @@ void MainWindow::restoreSplitterSizes()
 
 void MainWindow::on_actionPreviousDC_triggered()
 {
-	unsigned nrdc = number_of_computers(current_dive);
-	dc_number = (dc_number + nrdc - 1) % nrdc;
-	profile->plotCurrentDive();
-	mainTab->updateDiveInfo();
+	profile->prevDC();
+	// TODO: remove
+	mainTab->updateDiveInfo(getDiveSelection(), profile->d, profile->dc);
 }
 
 void MainWindow::on_actionNextDC_triggered()
 {
-	unsigned nrdc = number_of_computers(current_dive);
-	dc_number = (dc_number + 1) % nrdc;
-	profile->plotCurrentDive();
-	mainTab->updateDiveInfo();
+	profile->nextDC();
+	// TODO: remove
+	mainTab->updateDiveInfo(getDiveSelection(), profile->d, profile->dc);
 }
 
 void MainWindow::on_actionFullScreen_triggered(bool checked)
@@ -1264,27 +1273,23 @@ void MainWindow::setTitle()
 	setWindowTitle("Subsurface: " + displayedFilename(existing_filename) + unsaved + shown);
 }
 
-void MainWindow::importFiles(const QStringList fileNames)
+void MainWindow::importFiles(const QStringList &fileNames)
 {
 	if (fileNames.isEmpty())
 		return;
 
 	QByteArray fileNamePtr;
-	struct dive_table table = empty_dive_table;
-	struct trip_table trips = empty_trip_table;
-	struct dive_site_table sites = empty_dive_site_table;
-	struct device_table devices;
-	struct filter_preset_table filter_presets;
+	struct divelog log;
 
 	for (int i = 0; i < fileNames.size(); ++i) {
 		fileNamePtr = QFile::encodeName(fileNames.at(i));
-		parse_file(fileNamePtr.data(), &table, &trips, &sites, &devices, &filter_presets);
+		parse_file(fileNamePtr.data(), &log);
 	}
 	QString source = fileNames.size() == 1 ? fileNames[0] : tr("multiple files");
-	Command::importDives(&table, &trips, &sites, &devices, &filter_presets, IMPORT_MERGE_ALL_TRIPS, source);
+	Command::importDives(&log, IMPORT_MERGE_ALL_TRIPS, source);
 }
 
-void MainWindow::loadFiles(const QStringList fileNames)
+void MainWindow::loadFiles(const QStringList &fileNames)
 {
 	if (fileNames.isEmpty()) {
 		refreshDisplay();
@@ -1295,7 +1300,7 @@ void MainWindow::loadFiles(const QStringList fileNames)
 	showProgressBar();
 	for (int i = 0; i < fileNames.size(); ++i) {
 		fileNamePtr = QFile::encodeName(fileNames.at(i));
-		if (!parse_file(fileNamePtr.data(), &dive_table, &trip_table, &dive_site_table, &device_table, &filter_preset_table)) {
+		if (!parse_file(fileNamePtr.data(), &divelog)) {
 			setCurrentFile(fileNamePtr.data());
 			addRecentFile(fileNamePtr, false);
 		}
@@ -1305,6 +1310,7 @@ void MainWindow::loadFiles(const QStringList fileNames)
 	process_loaded_dives();
 
 	refreshDisplay();
+	updateAutogroup();
 
 	int min_datafile_version = get_min_datafile_version();
 	if (min_datafile_version >0 && min_datafile_version < DATAFORMAT_VERSION) {
@@ -1348,12 +1354,11 @@ void MainWindow::on_actionImportDiveLog_triggered()
 			logFiles.append(fn);
 	}
 
-	if (logFiles.size()) {
+	if (logFiles.size())
 		importFiles(logFiles);
-	}
 
 	if (csvFiles.size()) {
-		DiveLogImportDialog diveLogImport(csvFiles, this);
+		DiveLogImportDialog diveLogImport(std::move(csvFiles), this);
 		diveLogImport.exec();
 	}
 }
@@ -1366,28 +1371,19 @@ void MainWindow::on_actionImportDiveSites_triggered()
 		return;
 	updateLastUsedDir(QFileInfo(fileNames[0]).dir().path());
 
-	struct dive_table table = empty_dive_table;
-	struct trip_table trips = empty_trip_table;
-	struct dive_site_table sites = empty_dive_site_table;
-	struct device_table devices;
-	struct filter_preset_table filter_presets;
+	struct divelog log;
 
 	for (const QString &s: fileNames) {
 		QByteArray fileNamePtr = QFile::encodeName(s);
-		parse_file(fileNamePtr.data(), &table, &trips, &sites, &devices, &filter_presets);
+		parse_file(fileNamePtr.data(), &log);
 	}
 	// The imported dive sites still have pointers to imported dives - remove them
-	for (int i = 0; i < sites.nr; ++i)
-		sites.dive_sites[i]->dives.nr = 0;
-
-	// Now we can clear the imported dives and trips.
-	clear_dive_table(&table);
-	clear_trip_table(&trips);
+	for (int i = 0; i < log.sites->nr; ++i)
+		log.sites->dive_sites[i]->dives.nr = 0;
 
 	QString source = fileNames.size() == 1 ? fileNames[0] : tr("multiple files");
 
-	// sites table will be cleared by DivesiteImportDialog constructor
-	DivesiteImportDialog divesiteImport(sites, source, this);
+	DivesiteImportDialog divesiteImport(*log.sites, source, this);
 	divesiteImport.exec();
 }
 
@@ -1468,6 +1464,17 @@ bool MainWindow::userMayChangeAppState() const
 	return applicationState[(int)appState].allowUserChange;
 }
 
+// For the dive-site list view and the dive-site edit states,
+// we remember the previous state and then switch back to that.
+void MainWindow::enterPreviousState()
+{
+	if (state_stack.empty())
+		setApplicationState(ApplicationState::Default);
+	ApplicationState prev = state_stack.back();
+	state_stack.pop_back();
+	setApplicationState(prev);
+}
+
 void MainWindow::setApplicationState(ApplicationState state)
 {
 	if (appState == state)
@@ -1515,6 +1522,7 @@ void MainWindow::setApplicationState(ApplicationState state)
 	ui.actionViewProfile->setEnabled(allowChange);
 	ui.actionViewInfo->setEnabled(allowChange);
 	ui.actionViewMap->setEnabled(allowChange);
+	ui.actionViewDiveSites->setEnabled(allowChange);
 	ui.actionFilterTags->setEnabled(allowChange);
 }
 
@@ -1544,9 +1552,8 @@ void MainWindow::hideProgressBar()
 	}
 }
 
-void MainWindow::divesChanged(const QVector<dive *> &dives, DiveField field)
+void MainWindow::divesChanged(const QVector<dive *> &dives, DiveField)
 {
-	Q_UNUSED(field)
 	for (struct dive *d: dives) {
 		qDebug() << "dive #" << d->number << "changed, cache is" << (dive_cache_is_valid(d) ? "valid" : "invalidated");
 		// a brute force way to deal with that would of course be to call

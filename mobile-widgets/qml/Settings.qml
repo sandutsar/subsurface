@@ -61,6 +61,15 @@ TemplatePage {
 					text: describe[Backend.cloud_verification_status]
 					Layout.preferredHeight: Kirigami.Units.gridUnit * 1.5
 				}
+				TemplateButton {
+					id: deleteCloudAccount
+					enabled: Backend.cloud_verification_status !== Enums.CS_NOCLOUD
+					text: qsTr("Delete Account")
+					onClicked: {
+						manager.appendTextToLog("requesting account deletion");
+						showPage(deleteAccount)
+					}
+				}
 			}
 			TemplateLine {
 				visible: sectionGeneral.isExpanded
@@ -527,11 +536,11 @@ TemplatePage {
 			GridLayout {
 				visible: sectionAdvanced.isExpanded
 				width: parent.width
-				columns: 2
+				columns: 3
 
 				TemplateLine {
 					visible: sectionAdvanced.isExpanded
-					Layout.columnSpan: 2
+					Layout.columnSpan: 3
 				}
 				TemplateLabel {
 					text: qsTr("Bluetooth")
@@ -539,11 +548,12 @@ TemplatePage {
 					font.weight: Font.Light
 					Layout.topMargin: Kirigami.Units.largeSpacing
 					Layout.bottomMargin: Kirigami.Units.largeSpacing / 2
-					Layout.columnSpan: 2
+					Layout.columnSpan: 3
 				}
 				TemplateLabel {
 					text: qsTr("Temporarily show all bluetooth devices \neven if not recognized as dive computers.\nPlease report DCs that need this setting")
 					Layout.fillWidth: true
+					Layout.columnSpan: 2
 				}
 				SsrfSwitch {
 					id: nonDCButton
@@ -555,7 +565,7 @@ TemplatePage {
 
 				TemplateLine {
 					visible: sectionAdvanced.isExpanded
-					Layout.columnSpan: 2
+					Layout.columnSpan: 3
 				}
 				TemplateLabel {
 					text: qsTr("Display")
@@ -563,11 +573,12 @@ TemplatePage {
 					font.weight: Font.Light
 					Layout.topMargin: Kirigami.Units.largeSpacing
 					Layout.bottomMargin: Kirigami.Units.largeSpacing / 2
-					Layout.columnSpan: 2
+					Layout.columnSpan: 3
 				}
 				TemplateLabel {
 					text: qsTr("Show only one column in Portrait mode")
 					Layout.fillWidth: true
+					Layout.columnSpan: 2
 				}
 				SsrfSwitch {
 					id: singleColumnButton
@@ -576,9 +587,20 @@ TemplatePage {
 						PrefDisplay.singleColumnPortrait = checked
 					}
 				}
+				TemplateLabel {
+					text: qsTr("Depth line based on ×3 intervals")
+					Layout.columnSpan: 2
+				}
+				SsrfSwitch {
+					checked: PrefDisplay.three_m_based_grid
+					onClicked: {
+					PrefDisplay.three_m_based_grid = checked
+					rootItem.settingsChanged()
+					}
+				}
 				TemplateLine {
 					visible: sectionAdvanced.isExpanded
-					Layout.columnSpan: 2
+					Layout.columnSpan: 3
 				}
 				TemplateLabel {
 					text: qsTr("Profile deco ceiling")
@@ -586,10 +608,11 @@ TemplatePage {
 					font.weight: Font.Light
 					Layout.topMargin: Kirigami.Units.largeSpacing
 					Layout.bottomMargin: Kirigami.Units.largeSpacing / 2
-					Layout.columnSpan: 2
+					Layout.columnSpan: 3
 				}
 				TemplateLabel {
 					text: qsTr("Show DC reported ceiling")
+					Layout.columnSpan: 2
 				}
 				SsrfSwitch {
 					checked: PrefTechnicalDetails.dcceiling
@@ -600,6 +623,7 @@ TemplatePage {
 				}
 				TemplateLabel {
 					text: qsTr("Show calculated ceiling")
+					Layout.columnSpan: 2
 				}
 				SsrfSwitch {
 					checked: PrefTechnicalDetails.calcceiling
@@ -609,34 +633,76 @@ TemplatePage {
 					}
 				}
 				TemplateLabel {
-					text: qsTr("GFLow")
+					enabled: PrefTechnicalDetails.calcceiling
+					text: qsTr("GFLow (10 to 150)")
 				}
-				TemplateTextField {
+				TemplateSpinBox {
+					visible: PrefTechnicalDetails.calcceiling
 					id: gfLow
-					Layout.preferredWidth: Kirigami.Units.gridUnit * 2
-					text: PrefTechnicalDetails.gflow
-					inputMask: "99"
-					onEditingFinished: {
-						PrefTechnicalDetails.gflow = gfLow.text
+					Layout.columnSpan: 2
+					Layout.alignment: Qt.AlignHCenter
+					from: 10
+					to: 150
+					stepSize: 1
+					value: PrefTechnicalDetails.gflow
+					validator: RegExpValidator { regExp: /1?\d{0,2}%?/ }
+					textFromValue: function (value, locale) {
+						return value + "%"
+					}
+					valueFromText: function(text, locale) {
+						var result = parseInt(text);
+
+						if (result < 10)
+							result = 10;
+						else if (result > 150)
+							result = 150;
+						else if (isNaN(result))
+							result = 35;
+
+						return result;
+					}
+					onValueChanged: {
+						PrefTechnicalDetails.gflow = value
 						rootItem.settingsChanged()
 					}
 				}
 				TemplateLabel {
-					text: qsTr("GFHigh")
+					enabled: PrefTechnicalDetails.calcceiling
+					text: qsTr("GFHigh (10 to 150")
 				}
-				TemplateTextField {
+				TemplateSpinBox {
+					visible: PrefTechnicalDetails.calcceiling
 					id: gfHigh
-					Layout.preferredWidth: Kirigami.Units.gridUnit * 2
-					text: PrefTechnicalDetails.gfhigh
-					inputMask: "99"
-					onEditingFinished: {
-						PrefTechnicalDetails.gfhigh = gfHigh.text
+					Layout.columnSpan: 2
+					Layout.alignment: Qt.AlignHCenter
+					from: 10
+					to: 150
+					stepSize: 1
+					value: PrefTechnicalDetails.gfhigh
+					validator: RegExpValidator { regExp: /1?\d{0,2}%?/ }
+					textFromValue: function (value, locale) {
+						return value + "%"
+					}
+					valueFromText: function(text, locale) {
+						var result = parseInt(text);
+
+						if (result < 10)
+							result = 10;
+						else if (result > 150)
+							result = 150;
+						else if (isNaN(result))
+							result = 70;
+
+						return result;
+					}
+					onValueChanged: {
+						PrefTechnicalDetails.gfhigh = value
 						rootItem.settingsChanged()
 					}
 				}
 				TemplateLine {
 					visible: sectionAdvanced.isExpanded
-					Layout.columnSpan: 2
+					Layout.columnSpan: 3
 				}
 				TemplateLabel {
 					text: qsTr("Developer")
@@ -644,11 +710,12 @@ TemplatePage {
 					font.weight: Font.Light
 					Layout.topMargin: Kirigami.Units.largeSpacing
 					Layout.bottomMargin: Kirigami.Units.largeSpacing / 2
-					Layout.columnSpan: 2
+					Layout.columnSpan: 3
 				}
 				TemplateLabel {
 					text: qsTr("Display Developer menu")
 					Layout.fillWidth: true
+					Layout.columnSpan: 2
 				}
 				SsrfSwitch {
 					id: developerButton

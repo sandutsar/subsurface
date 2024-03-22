@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <QString>
 #include <QImageReader>
+#include <QSvgRenderer>
 #include <QDataStream>
 #include <QPainter>
 
@@ -41,11 +42,11 @@ void ImageDownloader::saveImage(QNetworkReply *reply)
 	QString filename = reply->request().attribute(QNetworkRequest::User).toString();
 
 	if (reply->error() != QNetworkReply::NoError) {
-		emit failed(filename);
+		emit failed(std::move(filename));
 	} else {
 		QByteArray imageData = reply->readAll();
 		if (imageData.isEmpty()) {
-			emit failed(filename);
+			emit failed(std::move(filename));
 		} else {
 			QString path = QStandardPaths::standardLocations(QStandardPaths::CacheLocation).first();
 			QDir dir(path);
@@ -62,7 +63,7 @@ void ImageDownloader::saveImage(QNetworkReply *reply)
 				imageFile.close();
 				learnPictureFilename(filename, imageFile.fileName());
 			}
-			emit loaded(filename);
+			emit loaded(std::move(filename));
 		}
 	}
 
@@ -153,12 +154,18 @@ Thumbnailer::Thumbnail Thumbnailer::getHashedImage(const QString &filename, bool
 	return thumbnail;
 }
 
-Thumbnailer::Thumbnailer() : failImage(renderSVGIcon(":filter-close", maxThumbnailSize(), false)), // TODO: Don't misuse filter close icon
-			     dummyImage(renderSVGIcon(":camera-icon", maxThumbnailSize(), false)),
-			     videoImage(renderSVGIcon(":video-icon", maxThumbnailSize(), false)),
-			     videoOverlayImage(renderSVGIconWidth(":video-overlay", maxThumbnailSize())),
-			     unknownImage(renderSVGIcon(":unknown-icon", maxThumbnailSize(), false))
+Thumbnailer::Thumbnailer() : failImage(QPixmap(":filter-close").scaled(maxThumbnailSize(), maxThumbnailSize(), Qt::KeepAspectRatio).toImage()), // TODO: Don't misuse filter close icon
+			     dummyImage(QPixmap(":camera-icon").scaled(maxThumbnailSize(), maxThumbnailSize(), Qt::KeepAspectRatio).toImage()),
+			     videoImage(QPixmap(":video-icon").scaled(maxThumbnailSize(), maxThumbnailSize(), Qt::KeepAspectRatio).toImage()),
+			     unknownImage(QPixmap(":unknown-icon").scaled(maxThumbnailSize(), maxThumbnailSize(), Qt::KeepAspectRatio).toImage())
 {
+	// We have to do this little song and dance because QSvgRenderer produces artifacts when used with Qt::KeepAspectRatio
+	QSvgRenderer videoOverlayRenderer{QString(":video-overlay")};
+	QSize svgSize = videoOverlayRenderer.defaultSize();
+	videoOverlayImage = QImage(maxThumbnailSize(), maxThumbnailSize() * svgSize.height() / svgSize.width(), QImage::Format_ARGB32);
+	videoOverlayImage.fill(Qt::transparent);
+	QPainter painter(&videoOverlayImage);
+	videoOverlayRenderer.render(&painter);
 	// Currently, we only process one image at a time. Stefan Fuchs reported problems when
 	// calculating multiple thumbnails at once and this hopefully helps.
 	pool.setMaxThreadCount(1);
@@ -179,7 +186,7 @@ Thumbnailer::Thumbnail Thumbnailer::getPictureThumbnailFromStream(QDataStream &s
 {
 	QImage res;
 	stream >> res;
-	return { res, MEDIATYPE_PICTURE, zero_duration };
+	return { std::move(res), MEDIATYPE_PICTURE, zero_duration };
 }
 
 void Thumbnailer::markVideoThumbnail(QImage &img)
@@ -346,7 +353,7 @@ Thumbnailer::Thumbnail Thumbnailer::addUnknownThumbnailToCache(const QString &pi
 void Thumbnailer::frameExtracted(QString filename, QImage thumbnail, duration_t duration, duration_t offset)
 {
 	if (thumbnail.isNull()) {
-		frameExtractionFailed(filename, duration);
+		frameExtractionFailed(std::move(filename), duration);
 		return;
 	} else {
 		int size = maxThumbnailSize();
@@ -355,7 +362,7 @@ void Thumbnailer::frameExtracted(QString filename, QImage thumbnail, duration_t 
 		addVideoThumbnailToCache(filename, duration, thumbnail, offset);
 		QMutexLocker l(&lock);
 		workingOn.remove(filename);
-		emit thumbnailChanged(filename, thumbnail, duration);
+		emit thumbnailChanged(filename, std::move(thumbnail), duration);
 	}
 }
 

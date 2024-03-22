@@ -18,11 +18,11 @@ public:
 
 	void resetModel(DiveTripModelBase::Layout layout);
 signals:
-	void selectionChanged(const QVector<QModelIndex> &indices);
-	void currentDiveChanged(QModelIndex index);
+	void divesSelected(const QVector<QModelIndex> &indices, QModelIndex currentDive, int currentDC); // currentDC < 0 -> keep DC.
+	void tripSelected(QModelIndex trip, QModelIndex currentDive);
 private slots:
-	void selectionChangedSlot(const QVector<QModelIndex> &indices);
-	void currentDiveChangedSlot(QModelIndex index);
+	void divesSelectedSlot(const QVector<QModelIndex> &indices, QModelIndex currentDive, int currentDC);
+	void tripSelectedSlot(QModelIndex trip, QModelIndex currentDive);
 private:
 	MultiFilterSortModel(QObject *parent = 0);
 	std::unique_ptr<DiveTripModelBase> model;

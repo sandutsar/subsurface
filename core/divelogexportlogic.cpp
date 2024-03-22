@@ -9,6 +9,7 @@
 #include "qthelper.h"
 #include "units.h"
 #include "statistics.h"
+#include "string-format.h"
 #include "save-html.h"
 
 static void file_copy_and_overwrite(const QString &fileName, const QString &newName)
@@ -34,13 +35,11 @@ static void exportHTMLsettings(const QString &filename, struct htmlExportSetting
 	} else if (prefs.unit_system == IMPERIAL) {
 		out << "\"unit_system\":\"Imperial\"";
 	} else {
-		QVariant v;
-		QString length, pressure, volume, temperature, weight;
-		length = prefs.units.length == units::METERS ? "METER" : "FEET";
-		pressure = prefs.units.pressure == units::BAR ? "BAR" : "PSI";
-		volume = prefs.units.volume == units::LITER ? "LITER" : "CUFT";
-		temperature = prefs.units.temperature == units::CELSIUS ? "CELSIUS" : "FAHRENHEIT";
-		weight = prefs.units.weight == units::KG ? "KG" : "LBS";
+		QString length = prefs.units.length == units::METERS ? "METER" : "FEET";
+		QString pressure = prefs.units.pressure == units::BAR ? "BAR" : "PSI";
+		QString volume = prefs.units.volume == units::LITER ? "LITER" : "CUFT";
+		QString temperature = prefs.units.temperature == units::CELSIUS ? "CELSIUS" : "FAHRENHEIT";
+		QString weight = prefs.units.weight == units::KG ? "KG" : "LBS";
 		out << "\"unit_system\":\"Personalize\",";
 		out << "\"units\":{\"depth\":\"" << length << "\",\"pressure\":\"" << pressure << "\",\"volume\":\"" << volume << "\",\"temperature\":\"" << temperature << "\",\"weight\":\"" << weight << "\"}";
 	}
@@ -93,9 +92,9 @@ static void exportHTMLstatistics(const QString filename, struct htmlExportSettin
 			out << "\"DIVES\":\"" << stats.stats_yearly[i].selection_size << "\",";
 			out << "\"TOTAL_TIME\":\"" << get_dive_duration_string(stats.stats_yearly[i].total_time.seconds,
 											gettextFromC::tr("h"), gettextFromC::tr("min"), gettextFromC::tr("sec"), " ") << "\",";
-			out << "\"AVERAGE_TIME\":\"" << get_minutes(stats.stats_yearly[i].total_time.seconds / stats.stats_yearly[i].selection_size) << "\",";
-			out << "\"SHORTEST_TIME\":\"" << get_minutes(stats.stats_yearly[i].shortest_time.seconds) << "\",";
-			out << "\"LONGEST_TIME\":\"" << get_minutes(stats.stats_yearly[i].longest_time.seconds) << "\",";
+			out << "\"AVERAGE_TIME\":\"" << formatMinutes(stats.stats_yearly[i].total_time.seconds / stats.stats_yearly[i].selection_size) << "\",";
+			out << "\"SHORTEST_TIME\":\"" << formatMinutes(stats.stats_yearly[i].shortest_time.seconds) << "\",";
+			out << "\"LONGEST_TIME\":\"" << formatMinutes(stats.stats_yearly[i].longest_time.seconds) << "\",";
 			out << "\"AVG_DEPTH\":\"" << get_depth_string(stats.stats_yearly[i].avg_depth) << "\",";
 			out << "\"MIN_DEPTH\":\"" << get_depth_string(stats.stats_yearly[i].min_depth) << "\",";
 			out << "\"MAX_DEPTH\":\"" << get_depth_string(stats.stats_yearly[i].max_depth) << "\",";
@@ -150,7 +149,7 @@ void exportHtmlInitLogic(const QString &filename, struct htmlExportSetting &hes)
 
 	QString searchPath = getSubsurfaceDataPath("theme");
 	if (searchPath.isEmpty()) {
-		report_error(qPrintable(gettextFromC::tr("Cannot find a folder called 'theme' in the standard locations")));
+		report_error("%s", qPrintable(gettextFromC::tr("Cannot find a folder called 'theme' in the standard locations")));
 		return;
 	}
 

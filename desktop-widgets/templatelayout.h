@@ -12,7 +12,7 @@ class QTextStream;
 
 void find_all_templates();
 void set_bundled_templates_as_read_only();
-void copy_bundled_templates(QString src, QString dst, QStringList *templateBackupList);
+void copy_bundled_templates(QString src, const QString &dst, QStringList *templateBackupList);
 
 enum token_t {LITERAL, FORSTART, FORSTOP, BLOCKSTART, BLOCKSTOP, IFSTART, IFSTOP, PARSERERROR};
 
@@ -27,7 +27,7 @@ class TemplateLayout : public QObject {
 	Q_OBJECT
 public:
 	TemplateLayout(const print_options &printOptions, const template_options &templateOptions);
-	QString generate(bool in_planner);
+	QString generate(const std::vector<dive *> &dives);
 	QString generateStatistics();
 	static QString readTemplate(QString template_name);
 	static void writeTemplate(QString template_name, QString grantlee_template);

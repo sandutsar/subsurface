@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "TabDiveStatistics.h"
+#include "maintab.h"
 #include "ui_TabDiveStatistics.h"
 
 #include "core/qthelper.h"
@@ -8,7 +9,7 @@
 #include <QLabel>
 #include <QIcon>
 
-TabDiveStatistics::TabDiveStatistics(QWidget *parent) : TabBase(parent), ui(new Ui::TabDiveStatistics())
+TabDiveStatistics::TabDiveStatistics(MainTab *parent) : TabBase(parent), ui(new Ui::TabDiveStatistics())
 {
 	ui->setupUi(this);
 	ui->sacLimits->overrideMaxToolTipText(tr("Highest total SAC of a dive"));
@@ -29,9 +30,8 @@ TabDiveStatistics::TabDiveStatistics(QWidget *parent) : TabBase(parent), ui(new 
 	connect(&diveListNotifier, &DiveListNotifier::cylinderEdited, this, &TabDiveStatistics::cylinderChanged);
 
 	const auto l = findChildren<QLabel *>(QString(), Qt::FindDirectChildrenOnly);
-	for (QLabel *label: l) {
+	for (QLabel *label: l)
 		label->setAlignment(Qt::AlignHCenter);
-	}
 }
 
 TabDiveStatistics::~TabDiveStatistics()
@@ -59,7 +59,7 @@ void TabDiveStatistics::divesChanged(const QVector<dive *> &dives, DiveField fie
 
 	// TODO: make this more fine grained. Currently, the core can only calculate *all* statistics.
 	if (field.duration || field.depth || field.mode || field.air_temp || field.water_temp)
-		updateData();
+		updateData(getDiveSelection(), parent.currentDive, parent.currentDC); // TODO: remember dive selection
 }
 
 void TabDiveStatistics::cylinderChanged(dive *d)
@@ -67,10 +67,10 @@ void TabDiveStatistics::cylinderChanged(dive *d)
 	// If the changed dive is not selected, do nothing
 	if (!d->selected)
 		return;
-	updateData();
+	updateData(getDiveSelection(), parent.currentDive, parent.currentDC); // TODO: remember dive selection
 }
 
-void TabDiveStatistics::updateData()
+void TabDiveStatistics::updateData(const std::vector<dive *> &, dive *currentDive, int)
 {
 	stats_t stats_selection;
 	calculate_stats_selected(&stats_selection);
@@ -109,7 +109,7 @@ void TabDiveStatistics::updateData()
 	}
 
 
-	bool is_freedive = current_dive && current_dive->dc.divemode == FREEDIVE;
+	bool is_freedive = currentDive && currentDive->dc.divemode == FREEDIVE;
 	ui->divesAllText->setText(QString::number(stats_selection.selection_size));
 	ui->totalTimeAllText->setText(get_dive_duration_string(stats_selection.total_time.seconds, tr("h"), tr("min"), tr("sec"), " ", is_freedive));
 

@@ -6,6 +6,8 @@
 #include "core/errorhelper.h"
 #include "core/settings/qPrefCloudStorage.h"
 #include <QRegularExpression>
+#include <QMessageBox>
+#include <QDesktopServices>
 
 PreferencesCloud::PreferencesCloud() : AbstractPreferencesWidget(tr("Cloud"),QIcon(":preferences-cloud-icon"), 9), ui(new Ui::PreferencesCloud())
 {
@@ -19,6 +21,11 @@ PreferencesCloud::PreferencesCloud() : AbstractPreferencesWidget(tr("Cloud"),QIc
 PreferencesCloud::~PreferencesCloud()
 {
 	delete ui;
+}
+
+void PreferencesCloud::on_resetPassword_clicked()
+{
+	QDesktopServices::openUrl(QUrl("https://cloud.subsurface-divelog.org/passwordreset"));
 }
 
 void PreferencesCloud::refreshSettings()
@@ -36,6 +43,7 @@ void PreferencesCloud::syncSettings()
 	QString email = ui->cloud_storage_email->text().toLower();
 	QString password = ui->cloud_storage_password->text();
 	QString newpassword = ui->cloud_storage_new_passwd->text();
+	QString emailpasswordformatwarning = tr("Change ignored. Cloud storage email and new password can only consist of letters, numbers, and '.', '-', '_', and '+'.");
 
 	//TODO: Change this to the Cloud Storage Stuff, not preferences.
 	if (prefs.cloud_verification_status == qPrefCloudStorage::CS_VERIFIED && !newpassword.isEmpty()) {
@@ -44,11 +52,11 @@ void PreferencesCloud::syncSettings()
 			// connect to backend server to check / create credentials
 			QRegularExpression reg("^[a-zA-Z0-9@.+_-]+$");
 			if (!reg.match(email).hasMatch() || (!password.isEmpty() && !reg.match(password).hasMatch())) {
-				report_error(qPrintable(tr("Change ignored. Cloud storage email and password can only consist of letters, numbers, and '.', '-', '_', and '+'.")));
+				QMessageBox::warning(this, tr("Warning"), emailpasswordformatwarning);
 				return;
 			}
 			if (!reg.match(email).hasMatch() || (!newpassword.isEmpty() && !reg.match(newpassword).hasMatch())) {
-				report_error(qPrintable(tr("Change ignored. Cloud storage email and new password can only consist of letters, numbers, and '.', '-', '_', and '+'.")));
+				QMessageBox::warning(this, tr("Warning"), emailpasswordformatwarning);
 				ui->cloud_storage_new_passwd->setText("");
 				return;
 			}
@@ -70,7 +78,7 @@ void PreferencesCloud::syncSettings()
 			// connect to backend server to check / create credentials
 			QRegularExpression reg("^[a-zA-Z0-9@.+_-]+$");
 			if (!reg.match(email).hasMatch() || (!password.isEmpty() && !reg.match(password).hasMatch())) {
-				report_error(qPrintable(tr("Cloud storage email and password can only consist of letters, numbers, and '.', '-', '_', and '+'.")));
+				QMessageBox::warning(this, tr("Warning"), emailpasswordformatwarning);
 				cloud->set_cloud_verification_status(oldVerificationStatus);
 				return;
 			}
@@ -84,11 +92,11 @@ void PreferencesCloud::syncSettings()
 			// connect to backend server to check / create credentials
 			QRegularExpression reg("^[a-zA-Z0-9@.+_-]+$");
 			if (!reg.match(email).hasMatch() || !reg.match(password).hasMatch()) {
-				report_error(qPrintable(tr("Cloud storage email and password can only consist of letters, numbers, and '.', '-', '_', and '+'.")));
+				QMessageBox::warning(this, tr("Warning"), emailpasswordformatwarning);
 				return;
 			}
 			CloudStorageAuthenticate *cloudAuth = new CloudStorageAuthenticate(this);
-			connect(cloudAuth, SIGNAL(finishedAuthenticate()), this, SLOT(updateCloudAuthenticationState()));
+			connect(cloudAuth, &CloudStorageAuthenticate::finishedAuthenticate, this, &PreferencesCloud::updateCloudAuthenticationState);
 			cloudAuth->backend(email, password, pin);
 		}
 	}

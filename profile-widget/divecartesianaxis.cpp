@@ -3,7 +3,7 @@
 #include "profile-widget/divetextitem.h"
 #include "core/profile.h"
 #include "core/qthelper.h"
-#include "core/subsurface-string.h"
+#include "core/subsurface-float.h"
 #include "profile-widget/animationfunctions.h"
 #include "profile-widget/divelineitem.h"
 #include "profile-widget/profilescene.h"
@@ -30,6 +30,7 @@ DiveCartesianAxis::DiveCartesianAxis(Position position, bool inverted, int integ
 	max(0),
 	textVisibility(textVisible),
 	lineVisibility(linesVisible),
+	gridIsMultipleOfThree(false),
 	labelScale(labelScale),
 	dpr(dpr),
 	transform({1.0, 0.0})
@@ -101,7 +102,7 @@ int DiveCartesianAxis::getMinLabelDistance(const DiveCartesianAxis &timeAxis) co
 	return int(ceil(interval));
 }
 
-static double sensibleInterval(double inc, int decimals, bool is_time_axis)
+static double sensibleInterval(double inc, int decimals, bool is_time_axis, bool is_multiple_of_three)
 {
 	if (is_time_axis && inc < 60.0) {
 		// for time axes and less than one hour increments, round to
@@ -130,11 +131,22 @@ static double sensibleInterval(double inc, int decimals, bool is_time_axis)
 
 	double digits_factor = pow(10.0, digits);
 	int inc_int = std::max((int)ceil(inc / digits_factor), 1);
-	// Do "nice" increments of the leading digit. In general: 1, 2, 4, 5.
-	if (inc_int > 5)
-		inc_int = 10;
-	if (inc_int == 3)
-		inc_int = 4;
+	if (is_multiple_of_three)
+	{
+		// Do increments quantized to 3. In general: 1, 3, 6, 15
+		if (inc_int > 6)
+			inc_int = 15;
+		else if (inc_int > 3)
+			inc_int = 6;
+		else if (inc_int == 2)
+			inc_int = 3;
+	} else {
+		// Do "nice" increments of the leading digit. In general: 1, 2, 4, 5.
+		if (inc_int > 5)
+			inc_int = 10;
+		if (inc_int == 3)
+			inc_int = 4;
+	}
 	inc = inc_int * digits_factor;
 
 	return inc;
@@ -165,7 +177,7 @@ void DiveCartesianAxis::updateTicks(int animSpeed)
 
 	// Round the interval to a sensible size in display units
 	double intervalDisplay = stepValue * transform.a;
-	intervalDisplay = sensibleInterval(intervalDisplay, fractionalDigits, position == Position::Bottom);
+	intervalDisplay = sensibleInterval(intervalDisplay, fractionalDigits, position == Position::Bottom, gridIsMultipleOfThree);
 
 	// Choose full multiples of the interval as minumum and maximum values
 	double minDisplay = transform.to(dataMin);
@@ -424,13 +436,23 @@ double DiveCartesianAxis::valueAt(const QPointF &p) const
 	return fraction * (max - min) + min;
 }
 
+double DiveCartesianAxis::deltaToValue(double delta) const
+{
+	QLineF m = line();
+	double screenSize = position == Position::Bottom ? m.x2() - m.x1()
+							 : m.y2() - m.y1();
+	double axisSize = max - min;
+	double res = delta * axisSize / screenSize;
+	return ((position == Position::Bottom) == inverted) ? -res : res;
+}
+
 double DiveCartesianAxis::posAtValue(double value, double max, double min) const
 {
 	QLineF m = line();
 
 	double screenFrom = position == Position::Bottom ? m.x1() : m.y1();
 	double screenTo = position == Position::Bottom ? m.x2() : m.y2();
-	if (IS_FP_SAME(min, max))
+	if (nearly_equal(min, max))
 		return (screenFrom + screenTo) / 2.0;
 	if ((position == Position::Bottom) == inverted)
 		std::swap(screenFrom, screenTo);
@@ -476,6 +498,11 @@ double DiveCartesianAxis::maximum() const
 double DiveCartesianAxis::minimum() const
 {
 	return min;
+}
+
+void DiveCartesianAxis::setGridIsMultipleOfThree(bool arg1)
+{
+	gridIsMultipleOfThree = arg1;
 }
 
 std::pair<double, double> DiveCartesianAxis::screenMinMax() const

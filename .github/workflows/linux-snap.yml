@@ -1,10 +1,14 @@
-name: Linux Snap
+name: Snap
 
 on:
   push:
+    paths-ignore:
+    - scripts/docker/**
     branches:
     - master
   pull_request:
+    paths-ignore:
+    - scripts/docker/**
     branches:
     - master
 
@@ -12,27 +16,34 @@ jobs:
   Snap:
     runs-on: ubuntu-latest
 
-    env:
-      SNAPCRAFT_BUILD_INFO: 1
-
     timeout-minutes: 60
     steps:
-    - name: Install Snapcraft
-      uses: samuelmeuli/action-snapcraft@v1
-
-    - name: Setup LXD
-      uses: whywaita/setup-lxd@v1
-
     - name: Check out code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
       with:
         # Needed for version determination to work
         fetch-depth: 0
+
+    - name: atomically create or retrieve the build number
+      id: version_number
+      if: github.event_name == 'push'
+      run: |
+        bash scripts/get-atomic-buildnr.sh ${{ github.sha }} ${{ secrets.NIGHTLY_BUILDS }} "CICD-release"
+
+    - name: store dummy version and build number for pull request
+      if: github.event_name == 'pull_request'
+      run: |
+        echo "100" > latest-subsurface-buildnumber
+        echo "CICD-pull-request" > latest-subsurface-buildnumber-extension
+
+    - name: Set up LXD
+      uses: canonical/setup-lxd@main
 
     - name: Set up CCache
       id: setup-ccache
       run: |
         sudo apt-get install ccache
+        mkdir -p ${HOME}/.ccache
         ccache --max-size=2G
         /snap/bin/lxc profile device add default ccache disk source=${HOME}/.ccache/ path=/root/.ccache
 
@@ -41,40 +52,29 @@ jobs:
 
         # Find common base between master and HEAD to use as cache key.
         git -c protocol.version=2 fetch --no-tags --prune --progress --no-recurse-submodules origin master
-        echo "::set-output name=key::$( git merge-base origin/master ${{ github.sha }} )"
+        echo "key=$( git merge-base origin/master ${{ github.sha }} )" >> $GITHUB_OUTPUT
 
     - name: CCache
-      uses: actions/cache@v2
+      uses: actions/cache@v3
       with:
         key: ccache-${{ runner.os }}-${{ steps.setup-ccache.outputs.key }}
         restore-keys: |
           ccache-${{ runner.os }}-
         path: ~/.ccache/**
 
-    - name: Build
-      run: |
-        # Build the `subsurface` part.
-        /snap/bin/snapcraft build --use-lxd subsurface
+    - name: Build and verify the snap
+      uses: canonical/actions/build-snap@release
+      id: build-snap
+      with:
+        setup-lxd: false
 
     - name: Clear CCache stats
       run: ccache --show-stats --zero-stats
 
-    - name: Build and verify the snap
-      id: build-snap
-      env:
-        SNAP_ENFORCE_RESQUASHFS: 0
-      run: |
-        # Actually build the snap.
-        /snap/bin/snapcraft --use-lxd
-
-        sudo snap install review-tools
-        /snap/bin/review-tools.snap-review *.snap
-
-        echo "::set-output name=snap-file::$( ls *.snap )"
-
     - name: Upload the snap
+      if: github.event_name == 'push'
       uses: actions/upload-artifact@v2
       with:
-        name: ${{ steps.build-snap.outputs.snap-file }}
-        path: ${{ steps.build-snap.outputs.snap-file }}
+        name: ${{ steps.build-snap.outputs.snap-name }}
+        path: ${{ steps.build-snap.outputs.snap-path }}
         if-no-files-found: error

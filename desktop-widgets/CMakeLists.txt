@@ -16,6 +16,8 @@ include_directories(.
 	${CMAKE_BINARY_DIR}
 )
 
+set(CMAKE_AUTOMOC ON)
+
 add_subdirectory(preferences)
 
 set (SUBSURFACE_UI
@@ -27,6 +29,7 @@ set (SUBSURFACE_UI
 	divelogexportdialog.ui
 	divelogimportdialog.ui
 	divesiteimportdialog.ui
+	divesitelistview.ui
 	diveplanner.ui
 	diveshareexportdialog.ui
 	downloadfromdivecomputer.ui
@@ -57,7 +60,6 @@ set (SUBSURFACE_UI
 	tab-widgets/TabDivePhotos.ui
 	tab-widgets/TabDiveExtraInfo.ui
 	tab-widgets/TabDiveEquipment.ui
-	tab-widgets/TabDiveSite.ui
 )
 
 # the interface, in C++
@@ -80,6 +82,8 @@ set(SUBSURFACE_INTERFACE
 	diveshareexportdialog.h
 	divesiteimportdialog.cpp
 	divesiteimportdialog.h
+	divesitelistview.cpp
+	divesitelistview.h
 	downloadfromdivecomputer.cpp
 	downloadfromdivecomputer.h
 	filterconstraintwidget.cpp
@@ -128,8 +132,6 @@ set(SUBSURFACE_INTERFACE
 	tab-widgets/TabDivePhotos.h
 	tab-widgets/TabDiveStatistics.cpp
 	tab-widgets/TabDiveStatistics.h
-	tab-widgets/TabDiveSite.cpp
-	tab-widgets/TabDiveSite.h
 	tab-widgets/maintab.cpp
 	tab-widgets/maintab.h
 	tableview.cpp
@@ -143,7 +145,7 @@ set(SUBSURFACE_INTERFACE
 	updatemanager.cpp
 	updatemanager.h
 )
-if(NOT USINGQT6)
+if(MAPSUPPORT)
 	LIST(APPEND SUBSURFACE_INTERFACE
 		mapwidget.cpp
 		mapwidget.h
@@ -181,21 +183,12 @@ endif()
 
 source_group("Subsurface Interface" FILES ${SUBSURFACE_INTERFACE})
 
-# the yearly statistics widget.
-set(SUBSURFACE_STATISTICS_LIB_SRCS
-	statistics/statisticswidget.cpp
-	statistics/statisticswidget.h
-)
-source_group("Subsurface Statistics" FILES ${SUBSURFACE_STATISTICS_LIB_SRCS})
-
 if(NOT USINGQT6)
 	qt5_wrap_ui(SUBSURFACE_UI_SRCS ${SUBSURFACE_UI})
 else()
 	qt_wrap_ui(SUBSURFACE_UI_SRCS ${SUBSURFACE_UI})
 endif()
 
-add_library(subsurface_statistics STATIC ${SUBSURFACE_STATISTICS_LIB_SRCS})
-target_link_libraries(subsurface_statistics ${QT_LIBRARIES})
 add_library(subsurface_generated_ui STATIC ${SUBSURFACE_UI_HDRS})
 target_link_libraries(subsurface_generated_ui ${QT_LIBRARIES})
 add_library(subsurface_interface STATIC ${SUBSURFACE_INTERFACE} ${SUBSURFACE_UI_SRCS})

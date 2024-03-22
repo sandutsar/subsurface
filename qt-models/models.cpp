@@ -18,24 +18,18 @@ Qt::ItemFlags GasSelectionModel::flags(const QModelIndex&) const
 	return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
 }
 
-GasSelectionModel *GasSelectionModel::instance()
+void GasSelectionModel::repopulate(const dive *d)
 {
-	static GasSelectionModel self;
-	return &self;
-}
-
-void GasSelectionModel::repopulate()
-{
-	setStringList(get_dive_gas_list(&displayed_dive));
+	setStringList(get_dive_gas_list(d));
 }
 
 QVariant GasSelectionModel::data(const QModelIndex &index, int role) const
 {
-	if (role == Qt::FontRole) {
+	if (role == Qt::FontRole)
 		return defaultModelFont();
-	}
 	return QStringListModel::data(index, role);
 }
+
 // Dive Type Model for the divetype combo box
 
 Qt::ItemFlags DiveTypeSelectionModel::flags(const QModelIndex&) const
@@ -43,15 +37,9 @@ Qt::ItemFlags DiveTypeSelectionModel::flags(const QModelIndex&) const
 	return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
 }
 
-DiveTypeSelectionModel *DiveTypeSelectionModel::instance()
+DiveTypeSelectionModel::DiveTypeSelectionModel()
 {
-	static DiveTypeSelectionModel self;
-	return &self;
-}
-
-void DiveTypeSelectionModel::repopulate()
-{
-	QStringList modes = QStringList();
+	QStringList modes;
 	for (int i = 0; i < FREEDIVE; i++)
 		modes.append(gettextFromC::tr(divemode_text_ui[i]));
 	setStringList(modes);
@@ -59,12 +47,10 @@ void DiveTypeSelectionModel::repopulate()
 
 QVariant DiveTypeSelectionModel::data(const QModelIndex &index, int role) const
 {
-	if (role == Qt::FontRole) {
+	if (role == Qt::FontRole)
 		return defaultModelFont();
-	}
 	return QStringListModel::data(index, role);
 }
-
 
 // Language Model, The Model to populate the list of possible Languages.
 

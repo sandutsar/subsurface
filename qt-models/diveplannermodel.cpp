@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "diveplannermodel.h"
+#include "core/dive.h"
 #include "core/divelist.h"
+#include "core/divelog.h"
 #include "core/subsurface-string.h"
 #include "qt-models/cylindermodel.h"
+#include "qt-models/models.h" // For defaultModelFont().
 #include "core/planner.h"
-#include "qt-models/models.h"
 #include "core/device.h"
 #include "core/qthelper.h"
+#include "core/range.h"
 #include "core/sample.h"
+#include "core/selection.h"
 #include "core/settings/qPrefDivePlanner.h"
 #include "core/settings/qPrefUnit.h"
 #if !defined(SUBSURFACE_TESTING)
@@ -83,8 +87,6 @@ void DivePlannerPointsModel::createSimpleDive(struct dive *dIn)
 		addStop(M_OR_FT(5, 15), 45 * 60, 0, cylinderid, true, UNDEF_COMP_TYPE);
 	}
 	updateDiveProfile();
-	GasSelectionModel::instance()->repopulate();
-	DiveTypeSelectionModel::instance()->repopulate();
 }
 
 void DivePlannerPointsModel::setupStartTime()
@@ -92,19 +94,19 @@ void DivePlannerPointsModel::setupStartTime()
 	// if the latest dive is in the future, then start an hour after it ends
 	// otherwise start an hour from now
 	startTime = QDateTime::currentDateTimeUtc().addSecs(3600 + gettimezoneoffset());
-	if (dive_table.nr) {
-		struct dive *d = get_dive(dive_table.nr - 1);
+	if (divelog.dives->nr > 0) {
+		struct dive *d = get_dive(divelog.dives->nr - 1);
 		time_t ends = dive_endtime(d);
 		time_t diff = ends - dateTimeToTimestamp(startTime);
-		if (diff > 0) {
+		if (diff > 0)
 			startTime = startTime.addSecs(diff + 3600);
-		}
 	}
 }
 
-void DivePlannerPointsModel::loadFromDive(dive *dIn)
+void DivePlannerPointsModel::loadFromDive(dive *dIn, int dcNrIn)
 {
 	d = dIn;
+	dcNr = dcNrIn;
 
 	int depthsum = 0;
 	int samplecount = 0;
@@ -112,7 +114,7 @@ void DivePlannerPointsModel::loadFromDive(dive *dIn)
 	struct divecomputer *dc = &(d->dc);
 	const struct event *evd = NULL;
 	enum divemode_t current_divemode = UNDEF_COMP_TYPE;
-	cylinders.updateDive(d);
+	cylinders.updateDive(d, dcNr);
 	duration_t lasttime = { 0 };
 	duration_t lastrecordedtime = {};
 	duration_t newtime = {};
@@ -146,10 +148,10 @@ void DivePlannerPointsModel::loadFromDive(dive *dIn)
 			break;
 		while (j * plansamples <= i * dc->samples) {
 			const sample &s = dc->sample[j];
-			const sample &prev = dc->sample[j-1];
 			if (s.time.seconds != 0 && (!hasMarkedSamples || s.manually_entered)) {
 				depthsum += s.depth.mm;
-				last_sp = prev.setpoint;
+				if (j > 0)
+					last_sp = dc->sample[j-1].setpoint;
 				++samplecount;
 				newtime = s.time;
 			}
@@ -175,7 +177,6 @@ void DivePlannerPointsModel::loadFromDive(dive *dIn)
 	current_divemode = get_current_divemode(dc, d->dc.duration.seconds, &evd, &current_divemode);
 	if (!hasMarkedSamples && !dc->last_manual_time.seconds)
 		addStop(0, d->dc.duration.seconds,cylinderid, last_sp.mbar, true, current_divemode);
-	DiveTypeSelectionModel::instance()->repopulate();
 	preserved_until = d->duration;
 
 	updateDiveProfile();
@@ -190,11 +191,11 @@ void DivePlannerPointsModel::setupCylinders()
 	clear_cylinder_table(&d->cylinders);
 	if (mode == PLAN && current_dive) {
 		// take the displayed cylinders from the selected dive as starting point
-		copy_used_cylinders(current_dive, d, !prefs.display_unused_tanks);
+		copy_used_cylinders(current_dive, d, !prefs.include_unused_tanks);
 		reset_cylinders(d, true);
 
 		if (d->cylinders.nr > 0) {
-			cylinders.updateDive(d);
+			cylinders.updateDive(d, dcNr);
 			return;		// We have at least one cylinder
 		}
 	}
@@ -212,7 +213,7 @@ void DivePlannerPointsModel::setupCylinders()
 		add_cylinder(&d->cylinders, 0, cyl);
 	}
 	reset_cylinders(d, false);
-	cylinders.updateDive(d);
+	cylinders.updateDive(d, dcNr);
 }
 
 // Update the dive's maximum depth.  Returns true if max. depth changed
@@ -382,8 +383,6 @@ bool DivePlannerPointsModel::setData(const QModelIndex &index, const QVariant &v
 				p.divemode = (enum divemode_t) value.toInt();
 				p.setpoint = p.divemode == CCR ? prefs.defaultsetpoint : 0;
 			}
-			if (index.row() == 0)
-				d->dc.divemode = (enum divemode_t) value.toInt();
 			break;
 		}
 		editStop(index.row(), p);
@@ -446,7 +445,7 @@ int DivePlannerPointsModel::rowCount(const QModelIndex&) const
 
 DivePlannerPointsModel::DivePlannerPointsModel(QObject *parent) : QAbstractTableModel(parent),
 	d(nullptr),
-	cylinders(true, false),
+	cylinders(true),
 	mode(NOTHING)
 {
 	memset(&diveplan, 0, sizeof(diveplan));
@@ -524,12 +523,22 @@ void DivePlannerPointsModel::setGFHigh(const int gfhigh)
 	}
 }
 
+int DivePlannerPointsModel::gfHigh() const
+{
+	return diveplan.gfhigh;
+}
+
 void DivePlannerPointsModel::setGFLow(const int gflow)
 {
 	if (diveplan.gflow != gflow) {
 		diveplan.gflow = gflow;
 		emitDataChanged();
 	}
+}
+
+int DivePlannerPointsModel::gfLow() const
+{
+	return diveplan.gflow;
 }
 
 void DivePlannerPointsModel::setRebreatherMode(int mode)
@@ -877,7 +886,7 @@ void DivePlannerPointsModel::editStop(int row, divedatapoint newData)
 
 	if (newRow != row && newRow != row + 1) {
 		beginMoveRows(QModelIndex(), row, row, QModelIndex(), newRow);
-		moveInVector(divepoints, row, row + 1, newRow);
+		move_in_range(divepoints, row, row + 1, newRow);
 		endMoveRows();
 
 		// Account for moving the row backwards in the array.
@@ -1024,6 +1033,14 @@ void DivePlannerPointsModel::createTemporaryPlan()
 {
 	// Get the user-input and calculate the dive info
 	free_dps(&diveplan);
+
+	for (int i = 0; i < d->cylinders.nr; i++) {
+		cylinder_t *cyl = get_cylinder(d, i);
+		if (cyl->depth.mm && cyl->cylinder_use == OC_GAS) {
+			plan_add_segment(&diveplan, 0, cyl->depth.mm, i, 0, false, OC);
+		}
+	}
+
 	int lastIndex = -1;
 	for (int i = 0; i < rowCount(); i++) {
 		divedatapoint p = at(i);
@@ -1038,20 +1055,6 @@ void DivePlannerPointsModel::createTemporaryPlan()
 			plan_add_segment(&diveplan, deltaT, p.depth.mm, p.cylinderid, p.setpoint, true, p.divemode);
 	}
 
-	struct divedatapoint *dp = NULL;
-	for (int i = 0; i < d->cylinders.nr; i++) {
-		cylinder_t *cyl = get_cylinder(d, i);
-		if (cyl->depth.mm && cyl->cylinder_use != NOT_USED) {
-			dp = create_dp(0, cyl->depth.mm, i, 0);
-			if (diveplan.dp) {
-				dp->next = diveplan.dp;
-				diveplan.dp = dp;
-			} else {
-				dp->next = NULL;
-				diveplan.dp = dp;
-			}
-		}
-	}
 #if DEBUG_PLAN
 	dump_plan(&diveplan);
 #endif
@@ -1258,9 +1261,9 @@ void DivePlannerPointsModel::computeVariations(struct diveplan *original_plan, c
 	restore_deco_state(save, &ds, false);
 
 	char buf[200];
-	sprintf(buf, ", %s: + %d:%02d /%s + %d:%02d /min", qPrintable(tr("Stop times")),
-		FRACTION(analyzeVariations(shallower, original, deeper, qPrintable(depth_units)), 60), qPrintable(depth_units),
-		FRACTION(analyzeVariations(shorter, original, longer, qPrintable(time_units)), 60));
+	sprintf(buf, ", %s: %c %d:%02d /%s %c %d:%02d /min", qPrintable(tr("Stop times")),
+		SIGNED_FRAC(analyzeVariations(shallower, original, deeper, qPrintable(depth_units)), 60), qPrintable(depth_units),
+		SIGNED_FRAC(analyzeVariations(shorter, original, longer, qPrintable(time_units)), 60));
 
 	// By using a signal, we can transport the variations to the main thread.
 	emit variationsComputed(QString(buf));
@@ -1272,7 +1275,7 @@ finish:
 	free(original_plan);
 	free(save);
 	free(cache);
-	free(dive);
+	free_dive(dive);
 }
 
 void DivePlannerPointsModel::computeVariationsDone(QString variations)
@@ -1319,7 +1322,7 @@ void DivePlannerPointsModel::createPlan(bool replanCopy)
 			disclaimerBegin = disclaimer.left(disclaimerMid);
 			disclaimerEnd = disclaimer.mid(disclaimerMid + 2);
 		} else {
-			disclaimerBegin = disclaimer;
+			disclaimerBegin = std::move(disclaimer);
 		}
 		int disclaimerPositionStart = oldnotes.indexOf(disclaimerBegin);
 		if (disclaimerPositionStart >= 0) {
@@ -1344,7 +1347,7 @@ void DivePlannerPointsModel::createPlan(bool replanCopy)
 		// we were planning a new dive, not re-planning an existing one
 		d->divetrip = nullptr; // Should not be necessary, just in case!
 #if !defined(SUBSURFACE_TESTING)
-		Command::addDive(d, autogroup, true);
+		Command::addDive(d, divelog.autogroup, true);
 #endif // !SUBSURFACE_TESTING
 	} else {
 		copy_events_until(current_dive, d, preserved_until.seconds);

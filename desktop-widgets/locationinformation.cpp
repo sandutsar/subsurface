@@ -8,11 +8,13 @@
 #include "desktop-widgets/mapwidget.h"
 #include "core/color.h"
 #include "core/divefilter.h"
+#include "core/divelog.h"
 #include "core/divesite.h"
 #include "core/divesitehelpers.h"
 #include "desktop-widgets/modeldelegates.h"
 #include "core/subsurface-qt/divelistnotifier.h"
 #include "core/taxonomy.h"
+#include "core/selection.h"
 #include "core/settings/qPrefUnit.h"
 #include "commands/command.h"
 
@@ -37,13 +39,12 @@ LocationInformationWidget::LocationInformationWidget(QWidget *parent) : QGroupBo
 	ui.diveSiteMessage->setText(tr("Dive site management"));
 	ui.diveSiteMessage->addAction(acceptAction);
 
-	connect(ui.geoCodeButton, SIGNAL(clicked()), this, SLOT(reverseGeocode()));
+	connect(ui.geoCodeButton, &QPushButton::clicked, this, &LocationInformationWidget::reverseGeocode);
 	ui.diveSiteCoordinates->installEventFilter(this);
 
 	connect(&diveListNotifier, &DiveListNotifier::diveSiteChanged, this, &LocationInformationWidget::diveSiteChanged);
 	connect(&diveListNotifier, &DiveListNotifier::diveSiteDeleted, this, &LocationInformationWidget::diveSiteDeleted);
 	connect(qPrefUnits::instance(), &qPrefUnits::unit_systemChanged, this, &LocationInformationWidget::unitsChanged);
-	unitsChanged();
 
 	ui.diveSiteListView->setModel(&filter_model);
 	ui.diveSiteListView->setModelColumn(LocationInformationModel::NAME);
@@ -57,13 +58,15 @@ void LocationInformationWidget::keyPressEvent(QKeyEvent *e)
 	return QGroupBox::keyPressEvent(e);
 }
 
-bool LocationInformationWidget::eventFilter(QObject *object, QEvent *ev)
+bool LocationInformationWidget::eventFilter(QObject *, QEvent *ev)
 {
-	Q_UNUSED(object)
 	if (ev->type() == QEvent::ContextMenu) {
 		QContextMenuEvent *ctx = (QContextMenuEvent *)ev;
 		QMenu contextMenu;
 		contextMenu.addAction(tr("Merge into current site"), this, &LocationInformationWidget::mergeSelectedDiveSites);
+		const QModelIndexList selection = ui.diveSiteListView->selectionModel()->selectedIndexes();
+		if (selection.count() == 1)
+			contextMenu.addAction(tr("Merge current site into this site"), this, &LocationInformationWidget::mergeIntoSelectedDiveSite);
 		contextMenu.exec(ctx->globalPos());
 		return true;
 	}
@@ -89,6 +92,24 @@ void LocationInformationWidget::mergeSelectedDiveSites()
 			selected_dive_sites.push_back(ds);
 	}
 	Command::mergeDiveSites(diveSite, selected_dive_sites);
+}
+
+void LocationInformationWidget::mergeIntoSelectedDiveSite()
+{
+	if (!diveSite)
+		return;
+
+	const QModelIndexList selection = ui.diveSiteListView->selectionModel()->selectedIndexes();
+	if (selection.count() != 1)
+		return;
+
+	dive_site *selected_dive_site = selection[0].data(LocationInformationModel::DIVESITE_ROLE).value<dive_site *>();
+	if (!selected_dive_site)
+		return;
+
+	QVector<dive_site *> dive_sites;
+	dive_sites.push_back(diveSite);
+	Command::mergeDiveSites(selected_dive_site, dive_sites);
 }
 
 // If we can't parse the coordinates, inform the user with a visual clue
@@ -221,7 +242,7 @@ void LocationInformationWidget::acceptChanges()
 
 	MainWindow::instance()->diveList->setEnabled(true);
 	MainWindow::instance()->setEnabledToolbar(true);
-	MainWindow::instance()->setApplicationState(MainWindow::ApplicationState::Default);
+	MainWindow::instance()->enterPreviousState();
 	DiveFilter::instance()->stopFilterDiveSites();
 
 	// Subtlety alert: diveSite must be cleared *after* exiting the dive-site mode.
@@ -245,8 +266,9 @@ void LocationInformationWidget::initFields(dive_site *ds)
 		filter_model.set(0, zero_location);
 		clearLabels();
 	}
-}
 
+	unitsChanged();
+}
 
 void LocationInformationWidget::on_GPSbutton_clicked()
 {
@@ -368,8 +390,8 @@ bool DiveLocationFilterProxyModel::lessThan(const QModelIndex &source_left, cons
 	// If there is a current location, sort by that - otherwise use the provided column
 	if (has_location(&currentLocation)) {
 		// The dive sites are -2 because of the first two items.
-		struct dive_site *ds1 = get_dive_site(source_left.row() - 2, &dive_site_table);
-		struct dive_site *ds2 = get_dive_site(source_right.row() - 2, &dive_site_table);
+		struct dive_site *ds1 = get_dive_site(source_left.row() - 2, divelog.sites);
+		struct dive_site *ds2 = get_dive_site(source_right.row() - 2, divelog.sites);
 		return get_distance(&ds1->location, &currentLocation) < get_distance(&ds2->location, &currentLocation);
 	}
 	return source_left.data().toString().compare(source_right.data().toString(), Qt::CaseInsensitive) < 0;
@@ -408,7 +430,7 @@ QVariant DiveLocationModel::data(const QModelIndex &index, int role) const
 	}
 
 	// The dive sites are -2 because of the first two items.
-	struct dive_site *ds = get_dive_site(index.row() - 2, &dive_site_table);
+	struct dive_site *ds = get_dive_site(index.row() - 2, divelog.sites);
 	return LocationInformationModel::getDiveSiteData(ds, index.column(), role);
 }
 
@@ -419,7 +441,17 @@ int DiveLocationModel::columnCount(const QModelIndex&) const
 
 int DiveLocationModel::rowCount(const QModelIndex&) const
 {
-	return dive_site_table.nr + 2;
+	return divelog.sites->nr + 2;
+}
+
+Qt::ItemFlags DiveLocationModel::flags(const QModelIndex &index) const
+{
+	// This is crazy: If an entry is not marked as editable, the QListView
+	// (or rather the QAbstractItemView base class) clears the WA_InputMethod
+	// flag, which means that key-composition events are disabled. This
+	// breaks composition as long as the popup is openen. Therefore,
+	// make all items editable.
+	return QAbstractItemModel::flags(index) | Qt::ItemIsEditable;
 }
 
 bool DiveLocationModel::setData(const QModelIndex &index, const QVariant &value, int)
@@ -436,9 +468,9 @@ bool DiveLocationModel::setData(const QModelIndex &index, const QVariant &value,
 }
 
 DiveLocationLineEdit::DiveLocationLineEdit(QWidget *parent) : QLineEdit(parent),
-							      proxy(new DiveLocationFilterProxyModel()),
-							      model(new DiveLocationModel()),
-							      view(new DiveLocationListView()),
+							      proxy(new DiveLocationFilterProxyModel),
+							      model(new DiveLocationModel),
+							      view(new DiveLocationListView),
 							      currDs(nullptr)
 {
 	proxy->setSourceModel(model);
@@ -496,9 +528,8 @@ bool DiveLocationLineEdit::eventFilter(QObject *, QEvent *e)
 			view->hide();
 			return true;
 		}
-	}
-	else if (e->type() == QEvent::InputMethod) {
-		this->inputMethodEvent(static_cast<QInputMethodEvent *>(e));
+	} else if (e->type() == QEvent::InputMethod) {
+		inputMethodEvent(static_cast<QInputMethodEvent *>(e));
 	}
 
 	return false;
@@ -533,11 +564,10 @@ static struct dive_site *get_dive_site_name_start_which_str(const QString &str)
 {
 	struct dive_site *ds;
 	int i;
-	for_each_dive_site (i, ds, &dive_site_table) {
+	for_each_dive_site (i, ds, divelog.sites) {
 		QString dsName(ds->name);
-		if (dsName.toLower().startsWith(str.toLower())) {
+		if (dsName.toLower().startsWith(str.toLower()))
 			return ds;
-		}
 	}
 	return NULL;
 }
@@ -566,8 +596,13 @@ void DiveLocationLineEdit::setTemporaryDiveSiteName(const QString &name)
 	model->setData(i1, i1_name);
 	proxy->setFilter(name);
 	fixPopupPosition();
-	if (!view->isVisible())
+	if (!view->isVisible()) {
 		view->show();
+		// TODO: For some reason the show() call clears this flag,
+		// which breaks key composition. Find the real cause for
+		// this strange behavior!
+		view->setAttribute(Qt::WA_InputMethodEnabled);
+	}
 }
 
 void DiveLocationLineEdit::keyPressEvent(QKeyEvent *ev)
@@ -597,7 +632,7 @@ void DiveLocationLineEdit::fixPopupPosition()
 	const int maxVisibleItems = 5;
 	QPoint pos;
 	int rh, w;
-	int h = (view->sizeHintForRow(0) * qMin(maxVisibleItems, view->model()->rowCount()) + 3) + 3;
+	int h = (view->sizeHintForRow(0) * std::min(maxVisibleItems, view->model()->rowCount()) + 3) + 3;
 	QScrollBar *hsb = view->horizontalScrollBar();
 	if (hsb && hsb->isVisible())
 		h += view->horizontalScrollBar()->sizeHint().height();
@@ -615,9 +650,9 @@ void DiveLocationLineEdit::fixPopupPosition()
 
 	int top = pos.y() - rh - screen.top() + 2;
 	int bottom = screen.bottom() - pos.y();
-	h = qMax(h, view->minimumHeight());
+	h = std::max(h, view->minimumHeight());
 	if (h > bottom) {
-		h = qMin(qMax(top, bottom), h);
+		h = std::min(std::max(top, bottom), h);
 		if (top > bottom)
 			pos.setY(pos.y() - h - rh + 2);
 	}
@@ -672,7 +707,7 @@ struct dive_site *DiveLocationLineEdit::currDiveSite() const
 	return text().trimmed().isEmpty() ? nullptr : currDs;
 }
 
-DiveLocationListView::DiveLocationListView(QWidget*)
+DiveLocationListView::DiveLocationListView(QWidget *parent) : QListView(parent)
 {
 }
 

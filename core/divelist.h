@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 struct dive;
+struct divelog;
 struct trip_table;
 struct dive_site_table;
 struct device_table;
@@ -19,7 +20,6 @@ struct dive_table {
 	struct dive **dives;
 };
 static const struct dive_table empty_dive_table = { 0, 0, (struct dive **)0 };
-extern struct dive_table dive_table;
 
 /* this is used for both git and xml format */
 #define DATAFORMAT_VERSION 3
@@ -35,16 +35,11 @@ extern void process_loaded_dives();
 #define	IMPORT_IS_DOWNLOADED (1 << 1)
 #define	IMPORT_MERGE_ALL_TRIPS (1 << 2)
 #define	IMPORT_ADD_TO_NEW_TRIP (1 << 3)
-extern void add_imported_dives(struct dive_table *import_table, struct trip_table *import_trip_table,
-			       struct dive_site_table *import_sites_table, struct device_table *devices_to_add,
-			       int flags);
-extern void process_imported_dives(struct dive_table *import_table, struct trip_table *import_trip_table,
-				   struct dive_site_table *import_sites_table, struct device_table *import_devices_table,
-				   int flags,
+extern void add_imported_dives(struct divelog *log, int flags);
+extern void process_imported_dives(struct divelog *import_log, int flags,
 				   struct dive_table *dives_to_add, struct dive_table *dives_to_remove,
 				   struct trip_table *trips_to_add, struct dive_site_table *sites_to_add,
 				   struct device_table *devices_to_add);
-extern char *get_dive_gas_string(const struct dive *dive);
 
 extern int dive_table_get_insertion_index(struct dive_table *table, struct dive *dive);
 extern void add_to_dive_table(struct dive_table *table, int idx, struct dive *dive);
@@ -53,7 +48,6 @@ extern void get_dive_gas(const struct dive *dive, int *o2_p, int *he_p, int *o2l
 extern int get_divenr(const struct dive *dive);
 extern int remove_dive(const struct dive *dive, struct dive_table *table);
 extern int get_dive_nr_at_idx(int idx);
-extern void set_dive_nr_for_current_dive();
 extern timestamp_t get_surface_interval(timestamp_t when);
 extern void delete_dive_from_table(struct dive_table *table, int idx);
 extern struct dive *find_next_visible_dive(timestamp_t when);

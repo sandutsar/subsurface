@@ -18,11 +18,9 @@ void addDive(dive *d, bool autogroup, bool newNumber)
 	execute(new AddDive(d, autogroup, newNumber));
 }
 
-void importDives(struct dive_table *dives, struct trip_table *trips, struct dive_site_table *sites,
-		 struct device_table *devices, struct filter_preset_table *presets,
-		 int flags, const QString &source)
+void importDives(struct divelog *log, int flags, const QString &source)
 {
-	execute(new ImportDives(dives, trips, sites, devices, presets, flags, source));
+	execute(new ImportDives(log, flags, source));
 }
 
 void deleteDive(const QVector<struct dive*> &divesToDelete)
@@ -279,9 +277,9 @@ void replanDive(dive *d)
 	execute(new ReplanDive(d));
 }
 
-void editProfile(const dive *d, EditProfileType type, int count)
+void editProfile(const dive *d, int dcNr, EditProfileType type, int count)
 {
-	execute(new EditProfile(d, type, count));
+	execute(new EditProfile(d, dcNr, type, count));
 }
 
 int addWeight(bool currentDiveOnly)
@@ -314,9 +312,9 @@ int editCylinder(int index, cylinder_t cyl, EditCylinderType type, bool currentD
 	return execute_edit(new EditCylinder(index, cyl, type, currentDiveOnly));
 }
 
-void editSensors(int toCylinder, const int fromCylinder)
+void editSensors(int toCylinder, int fromCylinder, int dcNr)
 {
-	execute(new EditSensors(toCylinder, fromCylinder));
+	execute(new EditSensors(toCylinder, fromCylinder, dcNr));
 }
 
 // Trip editing related commands

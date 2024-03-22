@@ -2,6 +2,7 @@
 #include "statsvariables.h"
 #include "statstranslations.h"
 #include "core/dive.h"
+#include "core/divelog.h"
 #include "core/divemode.h"
 #include "core/divesite.h"
 #include "core/gas.h"
@@ -270,7 +271,7 @@ QString StatsBinner::formatWithUnit(const StatsBin &bin) const
 {
 	QString unit = unitSymbol();
 	QString name = format(bin);
-	return unit.isEmpty() ? name : QStringLiteral("%1 %2").arg(name, unit);
+	return unit.isEmpty() ? std::move(name) : QStringLiteral("%1 %2").arg(name, unit);
 }
 
 QString StatsBinner::formatLowerBound(const StatsBin &bin) const
@@ -328,14 +329,14 @@ QString StatsVariable::nameWithUnit() const
 {
 	QString s = name();
 	QString symb = unitSymbol();
-	return symb.isEmpty() ? s : QStringLiteral("%1 [%2]").arg(s, symb);
+	return symb.isEmpty() ? std::move(s) : QStringLiteral("%1 [%2]").arg(s, symb);
 }
 
 QString StatsVariable::nameWithBinnerUnit(const StatsBinner &binner) const
 {
 	QString s = name();
 	QString symb = binner.unitSymbol();
-	return symb.isEmpty() ? s : QStringLiteral("%1 [%2]").arg(s, symb);
+	return symb.isEmpty() ? std::move(s) : QStringLiteral("%1 [%2]").arg(s, symb);
 }
 
 const StatsBinner *StatsVariable::getBinner(int idx) const
@@ -550,7 +551,7 @@ std::vector<StatsBinValue<T>> bin_convert(const StatsVariable &variable, const S
 		T v = func(dives);
 		if (is_invalid_value(v) && (res.empty() || !fill_empty))
 			continue;
-		res.push_back({ std::move(bin), v });
+		res.push_back({ std::move(bin), std::move(v) });
 	}
 	if (res.empty())
 		return res;
@@ -924,7 +925,7 @@ struct DateMonthBinner : public SimpleContinuousBinner<DateMonthBinner, DateMont
 		year_month value = derived_bin(bin).value;
 		return QString("%1 %2").arg(monthname(value.second), QString::number(value.first));
 	}
-	// In histograms, output year for fill years, month otherwise
+	// In histograms, output year for full years, month otherwise
 	QString formatLowerBound(const StatsBin &bin) const override {
 		year_month value = derived_bin(bin).value;
 		return value.second == 0 ? QString::number(value.first)
@@ -1380,7 +1381,7 @@ struct DiveNrVariable : public StatsVariableTemplate<StatsVariable::Type::Numeri
 		return StatsTranslations::tr("Dive #");
 	}
 	std::vector<const StatsBinner *> binners() const override {
-		if (dive_table.nr > 1000)
+		if (divelog.dives->nr > 1000)
 			return { &dive_nr_binner_20, &dive_nr_binner_50, &dive_nr_binner_100, &dive_nr_binner_200 };
 		else
 			return { &dive_nr_binner_5, &dive_nr_binner_10, &dive_nr_binner_20, &dive_nr_binner_50 };

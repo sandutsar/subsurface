@@ -6,11 +6,11 @@ not yet fully consistent to these rules, but following these rules will make
 sure that no one yells at you about your patches.
 
 We have a script that can be used to reformat code to be reasonably close
-to these rules; it's in scripts/whitespace.pl - this script requires
+to these rules; it's in `scripts/whitespace.pl` – this script requires
 clang-format to be installed (which sadly isn't installed by default on
 any of our platforms; even on Mac where clang is the default compiler).
 
-At the end of this file are some ideas for your .emacs file (if that's
+At the end of this file are some ideas for your `.emacs` file (if that's
 your editor of choice) as well as for QtCreator. If you have settings for
 other editors that implement this coding style, please add them here.
 
@@ -21,14 +21,14 @@ other editors that implement this coding style, please add them here.
 
 * all keywords followed by a '(' have a space in between
   ```
-	if (condition)
-
-	for (i = 0; i < 5; i++)
+  if (condition)
+  
+  for (i = 0; i < 5; i++)
   ```
 
 * function calls do NOT have a space between their name and argument
   ```
-	i = some_function(argument);
+  i = some_function(argument);
   ```
 
 * usually there is no space on the inside of parenthesis (see examples
@@ -40,68 +40,80 @@ other editors that implement this coding style, please add them here.
 * all other opening curly braces follow at the end of the line, with a
   space separating them:
   ```
-	if (condition) {
-		dosomething();
-		dosomethingelse();
-	}
+  if (condition) {
+  	dosomething();
+  	dosomethingelse();
+  }
   ```
 
-* both sides of an if / else clause either use or do not use curly braces:
+* both sides of an `if` / `else` clause either use or do not use curly braces:
   ```
-	if (condition)
-		i = 4;
-	else
-		j = 6;
-
-	if (condition) {
-		i = 6;
-	} else {
-		i = 4;
-		j = 6;
-	}
+  if (condition)
+  	i = 4;
+  else
+  	j = 6;
+  
+  if (condition) {
+  	i = 6;
+  } else {
+  	i = 4;
+  	j = 6;
+  }
   ```
 
 * use space to make visual separation easier
   ```
-	a = b + 3 + e / 4;
+  a = b + 3 + e / 4;
   ```
 
 * continuation lines have the operator / comma at the end
   ```
-	if (very_long_condition_1 ||
-	    condition_2)
-
-	b = a + (c + d +
-		 f + z);
+  if (very_long_condition_1 ||
+      condition_2)
+  
+  b = a + (c + d +
+  	 f + z);
   ```
 
 * in a C++ constructor initialization list, the colon is on the same line and
   continuation lines are aligned as the rule above:
   ```
-	ClassName::ClassName() : x(1),
-		y(2),
-		z(3)
-	{
-	}
+  ClassName::ClassName() : x(1),
+  	y(2),
+  	z(3)
+  {
+  }
   ```
 
 * unfortunate inconsistency
+
   - C code usually uses underscores to structure names
     ```
-	variable_in_C
+    variable_in_C
     ```
   - In contrast, C++ code usually uses camelCase
     ```
-	variableInCPlusPlus
+    variableInCPlusPlus
     ```
     for variable names and PascalCase
     ```
-	ClassInCPlusPlus
+    ClassInCPlusPlus
     ```
     for names of classes and other types
 
   where the two meet, use your best judgment and go for best consistency
   (i.e., where does the name "originate")
+
+* macro names should be capitalized; e.g., prefer
+  ```
+  #define FROB 17
+  #define FROBULATE(x) (x)+FROB
+  ```
+  to
+  ```
+  #define frob 17
+  #define frobulate(x) (x)+frob
+  ```
 
 * there is a strong preference for lower case file names; sometimes conventions
   or outside requirements make camelCase filenames the better (or only) choice,
@@ -113,33 +125,34 @@ other editors that implement this coding style, please add them here.
   case. Where it seems appropriate, multiple, closely related classes can be
   in a single file with a more generic name.
 
-* switch statements with blocks are a little bit special (to avoid indenting
+* `switch` statements with blocks are a little bit special (to avoid indenting
   too far)
   ```
-	switch (foo) {
-	case FIRST:
-		whatever();
-		break;
-	case SECOND: {
-		int i;
-		for (i = 0; i < 5; i++)
-			do_something(i);
-	}
-	}
+  switch (foo) {
+  case FIRST:
+  	whatever();
+  	break;
+  case SECOND: {
+  	int i;
+  	for (i = 0; i < 5; i++)
+  		do_something(i);
+  }
+  }
   ```
 
 ## Coding conventions
 
 * variable declarations
+
   In C code we really like them to be at the beginning of a code block,
   not interspersed in the middle.
-  in C++ we are a bit less strict about this - but still, try not to go
+  in C++ we are a bit less strict about this – but still, try not to go
   crazy. Notably, in C++ the lifetime of a variable often coincides with the
   lifetime of a resource (e.g. file) and therefore the variable is defined
   at the place where the resource is needed.
 
 * The `*`, `&` and `&&` declarators are grouped with the name, not the type
- (classical C-style) as in `char *string` instead of `char* string`. This
+  (classical C-style) as in `char *string` instead of `char* string`. This
   reflects the precedence rules of the language: `int &i` means that the name
   `i` stands for a reference [to an object with type `int`], not that
   `i` stands for an object of the type [reference to `int`].
@@ -147,84 +160,85 @@ other editors that implement this coding style, please add them here.
   have the same effect) it is crucial in the
   definition of multiple variables, such
   as
-	```
-	struct dive *next, **pprev;
-	```
+  ```
+  struct dive *next, **pprev;
+  ```
 
 * In C++ code, we generally use explicit types in variable declarations for clarity.
   Use `auto` sparingly and only in cases where code readability improves.
   Two classical examples are:
   - Iterators, whose type names often are verbose:
-	```
-	auto it = m_trackers.find(when);
-	```
-  	is not only distinctly shorter than
-	```
-	QMap<qint64, gpsTracker>::iterator it = m_trackers.find(when);
-	```
-  	it will also continue working if a different data structure is chosen.
+    ```
+    auto it = m_trackers.find(when);
+    ```
+    is not only distinctly shorter than
+    ```
+    QMap<qint64, gpsTracker>::iterator it = m_trackers.find(when);
+    ```
+    it will also continue working if a different data structure is chosen.
   - If the type is given in the same line anyway. Thus,
-	```
-	auto service = qobject_cast<QLowEnergyService*>(sender());
-	```
-  	is easier to read than and conveys the same information as
-	```
-	QLowEnergyService *service = qobject_cast<QLowEnergyService*>(sender());
-	```
+    ```
+    auto service = qobject_cast<QLowEnergyService*>(sender());
+    ```
+    is easier to read than and conveys the same information as
+    ```
+    QLowEnergyService *service = qobject_cast<QLowEnergyService*>(sender());
+    ```
   - If the variable is a container that is only assigned to a local variable to
-	be able to use it in a range-based for loop
-	```
-	const auto l = device.serviceUuids();
-	for (QBluetoothUuid id: serviceUuids) {
-	```
-	The variable has also to be const to avoid that Qt containers will do a
-	deep copy when the range bases for loop will call the begin() method
-	internally.
+    be able to use it in a range-based `for` loop
+    ```
+    const auto serviceUuids = device.serviceUuids();
+    for (QBluetoothUuid id: serviceUuids) {
+    ```
+    The variable has also to be const to avoid that Qt containers will do a
+    deep copy when the range bases `for` loop will call the `begin()` method
+    internally.
 
 * text strings
+
   The default language of subsurface is US English so please use US English
   spelling and terminology.
-  User-visible strings should be passed to the tr() function to enable
+  User-visible strings should be passed to the `tr()` function to enable
   translation into other languages.
   - like this
     ```
-	QString msgTitle = tr("Check for updates.");
+    QString msgTitle = tr("Check for updates.");
     ```
   - rather than
     ```
-	QString msgTitle = "Check for updates.";
+    QString msgTitle = "Check for updates.";
     ```
 
-  This works by default in classes (indirectly) derived from QObject. Each
+  This works by default in classes (indirectly) derived from `QObject`. Each
   string to be translated is associated with a context, which corresponds
-  to the class name. Classes that are not derived from QObject can generate
-  the tr() functions by using the `Q_DECLARE_TR_FUNCTIONS` macro:
+  to the class name. Classes that are not derived from `QObject` can generate
+  the `tr()` functions by using the `Q_DECLARE_TR_FUNCTIONS` macro:
   ```
-	#include <QCoreApplication>
-
-	class myClass {
-		Q_DECLARE_TR_FUNCTIONS(gettextfromC)
-		...
-	};
+  #include <QCoreApplication>
+  
+  class myClass {
+  	Q_DECLARE_TR_FUNCTIONS(gettextfromC)
+  	...
+  };
   ```
 
-  As an alternative, which also works outside of class context, the tr()
+  As an alternative, which also works outside of class context, the `tr()`
   function of a different class can be called. This avoids creating multiple
   translations for the same string:
   ```
-	gettextFromC::tr("%1km")
+  gettextFromC::tr("%1km")
   ```
 
-  The gettextFromC class in the above example was created as a catch-all
+  The `gettextFromC` class in the above example was created as a catch-all
   context for translations accessed in C code. But it can also be used
-  from C++ helper functions. To use it from C, include the "core/gettext.h"
-  header and invoke the translate() macro:
+  from C++ helper functions. To use it from C, include the `"core/gettext.h"`
+  header and invoke the `translate()` macro:
   ```
-	#include "core/gettext.h"
-
-	report_error(translate("gettextFromC", "Remote storage and local data diverged"));
+  #include "core/gettext.h"
+  
+  report_error(translate("gettextFromC", "Remote storage and local data diverged"));
   ```
-  It is crucial to pass "gettextFromC" as a first macro argument so that Qt
+  It is crucial to pass `"gettextFromC"` as a first macro argument so that Qt
   is able to associate the string with the correct context.
   The translate macro returns a cached C-style string, which is generated at runtime
   when the particular translation string is encountered for the first time.
@@ -233,19 +247,20 @@ other editors that implement this coding style, please add them here.
   Outside of function context, the `QT_TRANSLATE_NOOP` macro can be used as in
   ```
   struct ws_info_t ws_info[100] = {
-	{ QT_TRANSLATE_NOOP("gettextFromC", "integrated"), 0 },
-	{ QT_TRANSLATE_NOOP("gettextFromC", "belt"), 0 },
-	{ QT_TRANSLATE_NOOP("gettextFromC", "ankle"), 0 },
-	{ QT_TRANSLATE_NOOP("gettextFromC", "backplate"), 0 },
-	{ QT_TRANSLATE_NOOP("gettextFromC", "clip-on"), 0 },
+  	{ QT_TRANSLATE_NOOP("gettextFromC", "integrated"), 0 },
+  	{ QT_TRANSLATE_NOOP("gettextFromC", "belt"), 0 },
+  	{ QT_TRANSLATE_NOOP("gettextFromC", "ankle"), 0 },
+  	{ QT_TRANSLATE_NOOP("gettextFromC", "backplate"), 0 },
+  	{ QT_TRANSLATE_NOOP("gettextFromC", "clip-on"), 0 },
   };
   ```
-  Note that here, the texts will be scheduled for translation with the "gettextFromC"
+  Note that here, the texts will be scheduled for translation with the `"gettextFromC"`
   context, but the array is only initialized with the original text. The actual
   translation has to be performed later in code. For C-code, the `QT_TRANSLATE_NOOP`
-  macro is defined in the "core/gettext.h" header.
+  macro is defined in the `"core/gettext.h"` header.
 
 * UI text style
+
   These guidelines are designed to ensure consistency in presentation within
   Subsurface.
   Only the first word of multi-word text strings should be capitalized unless
@@ -264,10 +279,14 @@ other editors that implement this coding style, please add them here.
 
 
 * string manipulation
+
  * user interface
-    In UI part of the code use of QString methods is preferred, see this pretty
-    good guide in [QString documentation][1]
+
+    In UI part of the code use of `QString` methods is preferred, see this pretty
+    good guide in [`QString` documentation][1]
+
  * core components
+
     In the core part of the code, C-string should be used.
     C-string manipulation is not always straightforward specifically when
     it comes to memory allocation, a set of helper functions has been developed
@@ -278,8 +297,8 @@ other editors that implement this coding style, please add them here.
 
 ### Emacs
 
-These lines in your .emacs file should get you fairly close when it comes
-to indentation - many of the other rules you have to follow manually
+These lines in your `.emacs` file should get you fairly close when it comes
+to indentation – many of the other rules you have to follow manually
 
 ```
 ;; indentation
@@ -374,7 +393,7 @@ style that you can select which should work well for our coding style.
 ### Vim
 
 As everybody knows vim is a way better editor than emacs and thus needs to be
-in this file too. Put this into your .vimrc and this should produce something
+in this file too. Put this into your `.vimrc` and this should produce something
 close to our coding standards.
 
 ```

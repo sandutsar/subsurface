@@ -25,6 +25,8 @@ class qPrefDisplay : public QObject {
 	Q_PROPERTY(QByteArray windowState READ windowState WRITE set_windowState NOTIFY windowStateChanged)
 	Q_PROPERTY(int lastState READ lastState WRITE set_lastState NOTIFY lastStateChanged)
 	Q_PROPERTY(bool singleColumnPortrait READ singleColumnPortrait WRITE set_singleColumnPortrait NOTIFY singleColumnPortraitChanged)
+	Q_PROPERTY(bool three_m_based_grid READ three_m_based_grid WRITE set_three_m_based_grid NOTIFY three_m_based_gridChanged)
+	Q_PROPERTY(bool map_short_names READ map_short_names WRITE set_map_short_names NOTIFY map_short_namesChanged)
 
 public:
 	static qPrefDisplay *instance();
@@ -40,7 +42,7 @@ public:
 	static double font_size() { return prefs.font_size; }
 	static double mobile_scale() { return prefs.mobile_scale; }
 	static bool display_invalid_dives() { return prefs.display_invalid_dives; }
-	static QString lastDir() { return st_lastDir; ; }
+	static QString lastDir() { return st_lastDir; }
 	static bool show_developer() { return prefs.show_developer; }
 	static QString theme() { return st_theme; }
 	static QPointF tooltip_position() { return st_tooltip_position; }
@@ -52,6 +54,8 @@ public:
 	static QByteArray windowState() { return st_windowState; }
 	static int lastState() { return st_lastState; }
 	static bool singleColumnPortrait() { return st_singleColumnPortrait; }
+	static bool three_m_based_grid() { return prefs.three_m_based_grid; }
+	static bool map_short_names() { return prefs.map_short_names; }
 
 public slots:
 	static void set_animation_speed(int value);
@@ -71,6 +75,8 @@ public slots:
 	static void set_windowState(const QByteArray& value);
 	static void set_lastState(int value);
 	static void set_singleColumnPortrait(bool value);
+	static void set_three_m_based_grid(bool value);
+	static void set_map_short_names(bool value);
 
 signals:
 	void animation_speedChanged(int value);
@@ -90,6 +96,8 @@ signals:
 	void windowStateChanged(const QByteArray& value);
 	void lastStateChanged(int value);
 	void singleColumnPortraitChanged(bool value);
+	void three_m_based_gridChanged(bool value);
+	void map_short_namesChanged(bool value);
 
 private:
 	qPrefDisplay() {}
@@ -101,6 +109,8 @@ private:
 	static void disk_mobile_scale(bool doSync);
 	static void disk_display_invalid_dives(bool doSync);
 	static void disk_show_developer(bool doSync);
+	static void disk_three_m_based_grid(bool doSync);
+	static void disk_map_short_names(bool doSync);
 
 	// functions to handle class variables
 	static void load_lastDir();

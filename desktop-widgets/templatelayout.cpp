@@ -59,7 +59,7 @@ void set_bundled_templates_as_read_only()
 		QFile::setPermissions(pathUser + QDir::separator() + f, QFileDevice::ReadOwner | QFileDevice::ReadUser);
 }
 
-void copy_bundled_templates(QString src, QString dst, QStringList *templateBackupList)
+void copy_bundled_templates(QString src, const QString &dst, QStringList *templateBackupList)
 {
 	QDir dir(src);
 	if (!dir.exists())
@@ -95,24 +95,14 @@ TemplateLayout::TemplateLayout(const print_options &printOptions, const template
 {
 }
 
-QString TemplateLayout::generate(bool in_planner)
+QString TemplateLayout::generate(const std::vector<dive *> &dives)
 {
 	QString htmlContent;
 
 	State state;
 
-	if (in_planner) {
-		state.dives.append(&displayed_dive);
-	} else {
-		int i;
-		struct dive *dive;
-		for_each_dive (i, dive) {
-			//TODO check for exporting selected dives only
-			if (!dive->selected && printOptions.print_selected)
-				continue;
-			state.dives.append(dive);
-		}
-	}
+	for (dive *d: dives)
+		state.dives.append(d);
 
 	QString templateContents = readTemplate(printOptions.p_template);
 	numDives = state.dives.size();
@@ -464,11 +454,11 @@ QVariant TemplateLayout::getValue(QString list, QString property, const State &s
 			return get_dive_duration_string(object->total_time.seconds, gettextFromC::tr("h"),
 							gettextFromC::tr("min"), gettextFromC::tr("sec"), " ");
 		} else if (property == "avg_time") {
-			return get_minutes(object->total_time.seconds / object->selection_size);
+			return formatMinutes(object->total_time.seconds / object->selection_size);
 		} else if (property == "shortest_time") {
-			return get_minutes(object->shortest_time.seconds);
+			return formatMinutes(object->shortest_time.seconds);
 		} else if (property == "longest_time") {
-			return get_minutes(object->longest_time.seconds);
+			return formatMinutes(object->longest_time.seconds);
 		} else if (property == "avg_depth") {
 			return get_depth_string(object->avg_depth);
 		} else if (property == "min_depth") {

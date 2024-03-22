@@ -28,6 +28,7 @@ class QSortFilterProxyModel;
 class DiveTripModel;
 class QItemSelection;
 class DiveListView;
+class DiveSiteListView;
 class MainTab;
 class MapWidget;
 class QWebView;
@@ -55,10 +56,10 @@ public:
 	enum class ApplicationState {
 		Default,
 		PlanDive,
-		EditPlannedDive,
 		EditDiveSite,
 		FilterDive,
 		Statistics,
+		DiveSites,
 		MapMaximized,
 		ProfileMaximized,
 		ListMaximized,
@@ -66,19 +67,20 @@ public:
 		Count
 	};
 
-	void loadFiles(const QStringList files);
-	void importFiles(const QStringList importFiles);
+	void loadFiles(const QStringList &files);
+	void importFiles(const QStringList &importFiles);
 	void setToolButtonsEnabled(bool enabled);
 	void setApplicationState(ApplicationState state);
+	void enterPreviousState();
 	NotificationWidget *getNotificationWidget();
 	void enableDisableCloudActions();
-	void enableDisableOtherDCsActions();
 	void editDiveSite(dive_site *ds);
 	void setEnabledToolbar(bool arg1);
 
 	std::unique_ptr<MainTab> mainTab;
 	std::unique_ptr<PlannerWidgets> plannerWidgets;
 	std::unique_ptr<StatsWidget> statistics;
+	std::unique_ptr<DiveSiteListView> diveSites;
 	std::unique_ptr<DiveListView> diveList;
 	std::unique_ptr<ProfileWidget> profile;
 	std::unique_ptr<MapWidget> mapWidget;
@@ -112,6 +114,7 @@ slots:
 	void on_actionViewProfile_triggered();
 	void on_actionViewInfo_triggered();
 	void on_actionViewMap_triggered();
+	void on_actionViewDiveSites_triggered();
 	void on_actionViewAll_triggered();
 	void on_actionPreviousDC_triggered();
 	void on_actionNextDC_triggered();
@@ -124,7 +127,7 @@ slots:
 	void on_actionReplanDive_triggered();
 	void on_action_Check_for_Updates_triggered();
 
-	void selectionChanged();
+	void divesSelected(const std::vector<dive *> &selection, dive *currentDive, int currentDC);
 	void initialUiSetup();
 
 	void on_actionImportDiveLog_triggered();
@@ -158,6 +161,7 @@ slots:
 
 private:
 	ApplicationState appState;
+	std::vector<ApplicationState> state_stack;
 	Ui::MainWindow ui;
 	FilterWidget filterWidget;
 	std::unique_ptr<QSplitter> topSplitter;
@@ -183,6 +187,7 @@ private:
 	void hideProgressBar();
 	void writeSettings();
 	void refreshDisplay();
+	void updateAutogroup();
 	void showProfile();
 	int file_save();
 	int file_save_as();

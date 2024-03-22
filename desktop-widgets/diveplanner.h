@@ -2,20 +2,26 @@
 #ifndef DIVEPLANNER_H
 #define DIVEPLANNER_H
 
+#include "core/divemode.h"
+#include "core/owning_ptrs.h"
+
 #include <QAbstractTableModel>
 #include <QAbstractButton>
 #include <QDateTime>
 
-class QListView;
-class QModelIndex;
 class DivePlannerPointsModel;
+class GasSelectionModel;
+class DiveTypeSelectionModel;
+class PlannerWidgets;
+struct dive;
 
 #include "ui_diveplanner.h"
 
 class DivePlannerWidget : public QWidget {
 	Q_OBJECT
 public:
-	explicit DivePlannerWidget(QWidget *parent = 0);
+	explicit DivePlannerWidget(dive &planned_dive, PlannerWidgets *parent);
+	~DivePlannerWidget();
 	void setReplanButton(bool replan);
 public
 slots:
@@ -38,13 +44,13 @@ private:
 class PlannerSettingsWidget : public QWidget {
 	Q_OBJECT
 public:
-	explicit PlannerSettingsWidget(QWidget *parent = 0);
+	explicit PlannerSettingsWidget(PlannerWidgets *parent);
 	~PlannerSettingsWidget();
 public
 slots:
 	void settingsChanged();
 	void setBackgasBreaks(bool dobreaks);
-	void disableDecoElements(int mode);
+	void disableDecoElements(int mode, divemode_t rebreathermode);
 	void disableBackgasBreaks(bool enabled);
 	void setDiveMode(int mode);
 	void setBailoutVisibility(int mode);
@@ -75,12 +81,21 @@ class PlannerWidgets : public QObject {
 	Q_OBJECT
 public:
 	PlannerWidgets();
+	~PlannerWidgets();
+	void preparePlanDive(const dive *currentDive); // Create a new planned dive
 	void planDive();
-	void replanDive();
+	void prepareReplanDive(const dive *d); // Make a copy of the dive to be replanned
+	void replanDive(int currentDC);
+	struct dive *getDive() const;
+	divemode_t getRebreatherMode() const;
 public
 slots:
 	void printDecoPlan();
 public:
+	void repopulateGasModel();
+	OwningDivePtr planned_dive;
+	std::unique_ptr<GasSelectionModel> gasModel;
+	std::unique_ptr<DiveTypeSelectionModel> diveTypeModel;
 	DivePlannerWidget plannerWidget;
 	PlannerSettingsWidget plannerSettingsWidget;
 	PlannerDetails plannerDetails;

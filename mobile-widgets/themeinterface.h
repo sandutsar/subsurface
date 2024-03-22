@@ -3,8 +3,6 @@
 #define THEMEINTERFACE_H
 #include <QObject>
 #include <QColor>
-#include <QSettings>
-#include <QQmlContext>
 
 class ThemeInterface : public QObject {
 	Q_OBJECT
@@ -89,5 +87,7 @@ private:
 	double m_titlePointSize;
 
 	QString m_currentTheme;
+
+	bool m_needSignals;
 };
 #endif

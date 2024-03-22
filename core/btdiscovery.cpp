@@ -28,13 +28,16 @@ static struct modelPattern model[] = {
 	{ 0x4647, "Sherwood", "Sage" },
 	{ 0x4648, "Aqualung", "i300C" },
 	{ 0x4649, "Aqualung", "i200C" },
+	{ 0x4749, "Aqualung", "i200Cv2" },
 	{ 0x4651, "Aqualung", "i770R" },
 	{ 0x4652, "Aqualung", "i550C" },
 	{ 0x4653, "Oceanic", "Geo 4.0" },
 	{ 0x4654, "Oceanic", "Veo 4.0" },
 	{ 0x4655, "Sherwood", "Wisdom 4" },
 	{ 0x4656, "Oceanic", "Pro Plus 4" },
-	{ 0x4743, "Aqualung", "i470TC" }
+	{ 0x4741, "Apeks", "DSX" },
+	{ 0x4743, "Aqualung", "i470TC" },
+	{ 0x4744, "Aqualung", "i330R" },
 };
 
 struct namePattern {
@@ -42,9 +45,13 @@ struct namePattern {
 	const char *vendor;
 	const char *product;
 };
+// search is in order of this array, and as a prefix search, so more specific names
+// should be added before less specific names (i.e. "Perdix 2" before "Perdix")
 static struct namePattern name[] = {
 	// Shearwater dive computers
 	{ "Predator", "Shearwater", "Predator" },
+	{ "Perdix 2", "Shearwater", "Perdix 2"},
+	{ "Petrel 3", "Shearwater", "Petrel 3"},
 	// both the Petrel and Petrel 2 identify as "Petrel" as BT/BLE device
 	// but only the Petrel 2 is listed as available dive computer on iOS (which requires BLE support)
 	// so always pick the "Petrel 2" as product when seeing a Petrel
@@ -55,6 +62,7 @@ static struct namePattern name[] = {
 	{ "NERD 2", "Shearwater", "NERD 2" },
 	{ "NERD", "Shearwater", "NERD" }, // order is important, test for the more specific one first
 	{ "Predator", "Shearwater", "Predator" },
+	{ "Tern", "Shearwater", "Tern" },
 	// Suunto dive computers
 	{ "EON Steel", "Suunto", "EON Steel" },
 	{ "EON Core", "Suunto", "EON Core" },
@@ -62,9 +70,12 @@ static struct namePattern name[] = {
 	// Scubapro dive computers
 	{ "G2", "Scubapro", "G2" },
 	{ "HUD", "Scubapro", "G2 HUD" },
+	{ "G3", "Scubapro", "G3" },
 	{ "Aladin", "Scubapro", "Aladin Sport Matrix" },
 	{ "A1", "Scubapro", "Aladin A1" },
 	{ "A2", "Scubapro", "Aladin A2" },
+	{ "Luna 2.0 AI", "Scubapro", "Luna 2.0 AI" },
+	{ "Luna 2.0", "Scubapro", "Luna 2.0" },
 	// Mares dive computers
 	{ "Mares Genius", "Mares", "Genius" },
 	{ "Mares", "Mares", "Quad" }, // we actually don't know and just pick a common one - user needs to fix in UI
@@ -95,19 +106,20 @@ static dc_descriptor_t *getDeviceType(QString btName)
 		else if (btName.mid(4,2) == "2-") product = "OSTC 2N";
 		else if (btName.mid(4,2) == "+ ") product = "OSTC 2";
 		// all BT/BLE enabled OSTCs are HW_FAMILY_OSTC_3, so when we do not know,
-		// just use a default product that allows the codoe to download from the
+		// just use a default product that allows the code to download from the
 		// user's dive computer
 		else product = "OSTC 2";
 	} else if (btName.contains(QRegularExpression("^DS\\d{6}"))) {
 		// The Ratio bluetooth name looks like the Pelagic ones,
 		// but that seems to be just happenstance.
 		vendor = "Ratio";
-		product = "iX3M GPS Easy"; // we don't know which of the GPS models, so set one
-	} else if (btName.contains(QRegularExpression("^IX5M\\d{6}"))) {
+		product = "iX3M 2021 GPS Easy"; // we don't know which of the Bluetooth models, so set one that supports BLE
+	} else if (btName.contains(QRegularExpression("^IX5M\\d{6}")) ||
+		btName.contains(QRegularExpression("^RATIO-\\d{6}"))) {
 		// The 2021 iX3M models (square buttons) report as iX5M,
 		// eventhough the physical model states iX3M.
 		vendor = "Ratio";
-		product = "iX3M GPS Easy"; // we don't know which of the GPS models, so set one
+		product = "iX3M 2021 GPS Easy"; // we don't know which of the Bluetooth models, so set one that supports BLE
 	} else if (btName.contains(QRegularExpression("^[A-Z]{2}\\d{6}"))) {
 		// try the Pelagic/Aqualung name patterns
 		// the source of truth for this data is in libdivecomputer/src/descriptor.c
@@ -137,11 +149,21 @@ static dc_descriptor_t *getDeviceType(QString btName)
 	// check if we found a known dive computer
 	if (!vendor.isEmpty() && !product.isEmpty()) {
 		dc_descriptor_t *lookup = descriptorLookup.value(vendor.toLower() + product.toLower());
-		if (!lookup)
-			qWarning("known dive computer %s not found in descriptorLookup", qPrintable(QString(vendor + product)));
+		if (!lookup) {
+			// the Ratio dive computers come in BT only or BLE only and we can't tell
+			// which just from the name; so while this is fairly unlikely, the user
+			// could be on an older computer / device that only supports BT and no BLE
+			// and giving the BLE only name might therefore not work, so try the other
+			// one just in case
+			if (vendor == "Ratio" && product == "iX3M 2021 GPS Easy") {
+				product = "iX3M GPS Easy"; // this one is BT only
+				lookup = descriptorLookup.value(vendor.toLower() + product.toLower());
+			}
+			if (!lookup) // still nothing?
+				qWarning("known dive computer %s not found in descriptorLookup", qPrintable(QString(vendor + product)));
+		}
 		return lookup;
 	}
-
 	return nullptr;
 }
 

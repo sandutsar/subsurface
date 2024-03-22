@@ -27,6 +27,7 @@
 #endif
 
 #include "core/dive.h"
+#include "core/divelog.h"
 #include "core/subsurface-string.h"
 #include "core/gettext.h"
 #include "core/divelist.h"
@@ -51,12 +52,15 @@ static void smtk_free(char **array, int count)
 }
 
 /*
- * There are AFAIK two versions of Smarttrak. The newer one supports trimix and up
- * to 10 tanks. The other one just 3 tanks and no trimix but only nitrox. This is a
+ * There are AFAIK three versions of Smarttrak DB format. The newer one supports trimix and up
+ * to 10 tanks. The intermediate one just 3 tanks and no trimix but only nitrox. This is a
  * problem for an automated parser which has to support both formats.
  * In this solution I made an enum of fields with the same order they would have in
  * a smarttrak db, and a tiny function which returns the number of the column where
- * a field is expected to be, taking into account the different db formats .
+ * a field is expected to be, taking into account the different db formats.
+ * The older version (version 10000), just one tank (nitrox) but it's critically different from
+ * the newer version, not only in the Dives table format, but it has different tables. We won't
+ * give support for this oldest DB format.
  */
 enum field_pos {IDX = 0, DIVENUM, _DATE, INTIME, INTVAL, DURATION, OUTTIME, DESATBEFORE, DESATAFTER, NOFLYBEFORE,
 		NOFLYAFTER, NOSTOPDECO, MAXDEPTH, VISIBILITY, WEIGHT, O2FRAC, HEFRAC, PSTART, PEND, AIRTEMP,
@@ -321,7 +325,7 @@ static void smtk_wreck_site(MdbHandle *mdb, char *site_idx, struct dive_site *ds
  * Location format:
  * | Idx | Text | Province | Country | Depth |
  */
-static void smtk_build_location(MdbHandle *mdb, char *idx, struct dive_site **location)
+static void smtk_build_location(MdbHandle *mdb, char *idx, struct dive_site **location, struct divelog *log)
 {
 	MdbTableDef *table;
 	MdbColumn *col[MDB_MAX_COLS];
@@ -373,7 +377,7 @@ static void smtk_build_location(MdbHandle *mdb, char *idx, struct dive_site **lo
 	do {
 		rc = mdb_fetch_row(table);
 	} while (strcasecmp(bound_values[0], loc_idx) && rc != 0);
-	if (rc == 0){
+	if (rc == 0) {
 		smtk_free(bound_values, table->num_cols);
 		mdb_free_tabledef(table);
 		if(notes)
@@ -393,12 +397,12 @@ static void smtk_build_location(MdbHandle *mdb, char *idx, struct dive_site **lo
 		str = smtk_concat_str(str, ", ", "%s", bound_values[1]); // Locality
 	str =  smtk_concat_str(str, ", ", "%s", site);
 
-	ds = get_dive_site_by_name(str, &dive_site_table);
+	ds = get_dive_site_by_name(str, log->sites);
 	if (!ds) {
 		if (!has_location(&loc))
-			ds = create_dive_site(str, &dive_site_table);
+			ds = create_dive_site(str, log->sites);
 		else
-			ds = create_dive_site_with_gps(str, &loc, &dive_site_table);
+			ds = create_dive_site_with_gps(str, &loc, log->sites);
 	}
 	*location = ds;
 	smtk_free(bound_values, table->num_cols);
@@ -868,7 +872,7 @@ static int prepare_data(int data_model, char *serial, dc_family_t dc_fam, device
 {
 	dev_data->device = NULL;
 	dev_data->context = NULL;
-	if (!data_model){
+	if (!data_model) {
 		dev_data->model = copy_string("manually added dive");
 		dev_data->descriptor = NULL;
 		return DC_STATUS_NODEVICE;
@@ -928,7 +932,7 @@ static dc_status_t libdc_buffer_complete(device_data_t *dev_data, unsigned char 
  * a single DB breaks binded row data, and so would break the top loop.
  */
 
-void smartrak_import(const char *file, struct dive_table *divetable)
+void smartrak_import(const char *file, struct divelog *log)
 {
 	MdbHandle *mdb, *mdb_clon;
 	MdbTableDef *mdb_table;
@@ -979,8 +983,15 @@ void smartrak_import(const char *file, struct dive_table *divetable)
 	smtk_build_list(mdb_clon, "Surface", surface_list);
 	smtk_build_buddies(mdb_clon, buddy_list);
 
-	/* Check Smarttrak version (different number of supported tanks, mixes and so) */
+	/* Check Smarttrak version (different number of supported tanks, mixes and so).
+	 * File format 10000 is quite different from other formats, just drop it and give
+	 * a tip to the user.
+	 */
 	smtk_version = atoi(smtk_ver[0]);
+	if (smtk_version == 10000) {
+		report_error("[Error]\t File %s is SmartTrak file format %d which is not supported. Please load the file in a newer SmartTrak software version and upgrade it.", file, smtk_version);
+		return;
+	}
 	tanks = (smtk_version < 10213) ? 3 : 10;
 
 	mdb_table = smtk_open_table(mdb, "Dives", bound_values, bound_lens);
@@ -1097,7 +1108,7 @@ void smartrak_import(const char *file, struct dive_table *divetable)
 		weightsystem_t ws = { {lrint(strtod(col[coln(WEIGHT)]->bind_ptr, NULL) * 1000)}, "", false };
 		add_cloned_weightsystem(&smtkdive->weightsystems, ws);
 		smtkdive->suit = copy_string(suit_list[atoi(col[coln(SUITIDX)]->bind_ptr) - 1]);
-		smtk_build_location(mdb_clon, col[coln(SITEIDX)]->bind_ptr, &smtkdive->dive_site);
+		smtk_build_location(mdb_clon, col[coln(SITEIDX)]->bind_ptr, &smtkdive->dive_site, log);
 		smtkdive->buddy = smtk_locate_buddy(mdb_clon, col[0]->bind_ptr, buddy_list);
 		smtk_parse_relations(mdb_clon, smtkdive, col[0]->bind_ptr, "Type", "TypeRelation", type_list, true);
 		smtk_parse_relations(mdb_clon, smtkdive, col[0]->bind_ptr, "Activity", "ActivityRelation", activity_list, false);
@@ -1109,7 +1120,7 @@ void smartrak_import(const char *file, struct dive_table *divetable)
 		smtk_parse_bookmarks(mdb_clon, smtkdive, col[0]->bind_ptr);
 		smtkdive->notes = smtk_concat_str(smtkdive->notes, "\n", "%s", col[coln(REMARKS)]->bind_ptr);
 
-		record_dive_to_table(smtkdive, divetable);
+		record_dive_to_table(smtkdive, log->dives);
 		device_data_free(devdata);
 	}
 	mdb_free_tabledef(mdb_table);
@@ -1117,5 +1128,5 @@ void smartrak_import(const char *file, struct dive_table *divetable)
 	mdb->catalog = NULL;
 	mdb_close(mdb_clon);
 	mdb_close(mdb);
-	sort_dive_table(divetable);
+	sort_dive_table(log->dives);
 }

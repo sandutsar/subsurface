@@ -1,72 +1,71 @@
 name: Mac
 on:
   push:
+    paths-ignore:
+    - scripts/docker/**
     branches:
     - master
   pull_request:
+    paths-ignore:
+    - scripts/docker/**
     branches:
     - master
 
 jobs:
   buildMac:
-    runs-on: macOS-latest
+    runs-on: macOS-11
     steps:
     - name: checkout sources
       uses: actions/checkout@v1
+
+    - name: atomically create or retrieve the build number and assemble release notes
+      id: version_number
+      if: github.event_name == 'push'
+      run: |
+        bash scripts/get-atomic-buildnr.sh ${{ github.sha }} ${{ secrets.NIGHTLY_BUILDS }} "CICD-release"
+        version=$(cat release-version)
+        echo "version=$version" >> $GITHUB_OUTPUT
+
+    - name: store dummy version and build number for pull request
+      if: github.event_name == 'pull_request'
+      run: |
+        echo "100" > latest-subsurface-buildnumber
+        echo "CICD-pull-request" > latest-subsurface-buildnumber-extension
+
     - name: setup Homebrew
-      run: brew install autoconf automake libtool xz hidapi libusb libxml2 libxslt libzip openssl pkg-config libgit2 libssh2 libjpg libpng libmtp
+      run: brew install hidapi libxslt libjpg libmtp create-dmg confuse
     - name: set our Qt build
       run: |
-        mkdir -p Qt/5.13.0
-        curl --output Qt-5.13.0-mac.tar.xz https://f002.backblazeb2.com/file/Subsurface-Travis/Qt-5.13.0-mac.tar.xz
-        tar -xJ -C Qt/5.13.0 -f Qt-5.13.0-mac.tar.xz
-    - name: build Subsurface-mobile
-      run: |
-        cd ${GITHUB_WORKSPACE}/..
-        export QT_ROOT=${GITHUB_WORKSPACE}/Qt/5.13.0/clang_64
-        export QT_QPA_PLATFORM_PLUGIN_PATH=$QT_ROOT/plugins
-        export PATH=$QT_ROOT/bin:$PATH
-        export CMAKE_PREFIX_PATH=$QT_ROOT/lib/cmake
-        DIR=$(pwd)
-        git config --global user.email "ci@subsurface-divelog.org"
-        git config --global user.name "Subsurface CI"
-        # first build Subsurface-mobile to ensure this didn't get broken
-        bash -e -x ./subsurface/scripts/build.sh -mobile
-
-    - name: test mobile build
-      run: |
-        echo "------------------------------------"
-        echo "run tests for mobile build"
-        export QT_ROOT=${GITHUB_WORKSPACE}/Qt/5.13.0/clang_64
-        export QT_QPA_PLATFORM_PLUGIN_PATH=$QT_ROOT/plugins
-        cd ${GITHUB_WORKSPACE}/build-mobile/tests
-        # ./TestGitStorage -v2
-        make check
-
+        curl --output ssrf-Qt-5.15.2-mac.tar.xz https://f002.backblazeb2.com/file/Subsurface-Travis/ssrf-Qt5.15.2.tar.xz
+        tar -xJf ssrf-Qt-5.15.2-mac.tar.xz
     - name: build Subsurface
+      id: build
       run: |
         cd ${GITHUB_WORKSPACE}/..
-        export QT_ROOT=${GITHUB_WORKSPACE}/Qt/5.13.0/clang_64
+        export QT_ROOT=${GITHUB_WORKSPACE}/Qt5.15.2/5.15.2/clang_64
         export QT_QPA_PLATFORM_PLUGIN_PATH=$QT_ROOT/plugins
         export PATH=$QT_ROOT/bin:$PATH
         export CMAKE_PREFIX_PATH=$QT_ROOT/lib/cmake
-        DIR=$(pwd)
 
-        # now Subsurface with WebKit
-        bash -e -x ./subsurface/scripts/build.sh -desktop -build-with-webkit -release
+        # now setup Subsurface with WebKit and build the dependencies, using the generic build script
+        bash -e -x ./subsurface/scripts/build.sh -desktop -build-with-webkit -release -build-deps -ftdi -prep-only
 
-        cd ${GITHUB_WORKSPACE}/build
+        echo "finished initial cmake setup of Subsurface - next build the package"
+        cd subsurface/build
+        echo "run the packaging script"
+        bash -e -x ../packaging/macosx/make-package.sh | tee mp.log 2>&1
+        IMG=$(grep ^created: mp.log | tail -1 | cut -b10-)
+        echo "Created $IMG"
+        echo "dmg=$IMG" >> $GITHUB_OUTPUT
 
-        # build export-html to make sure that didn't get broken
-        make export-html
-
-    - name: test desktop build
-      run: |
-        echo "------------------------------------"
-        echo "run tests for desktop build"
-        export QT_ROOT=${GITHUB_WORKSPACE}/Qt/5.13.0/clang_64
-        export QT_QPA_PLATFORM_PLUGIN_PATH=$QT_ROOT/plugins
-        cd ${GITHUB_WORKSPACE}/build/tests
-        # ./TestGitStorage -v2
-        make check
-
+    # only publish a 'release' on push events (those include merging a PR)
+    - name: upload binaries
+      if: github.event_name == 'push'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ steps.version_number.outputs.version }}
+        repository: ${{ github.repository_owner }}/nightly-builds
+        token: ${{ secrets.NIGHTLY_BUILDS }}
+        prerelease: false
+        fail_on_unmatched_files: true
+        files: ${{ steps.build.outputs.dmg }}

@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#include "command.h"
 #include "command_base.h"
+#include "core/divelog.h"
+#include "core/globals.h"
 #include "core/qthelper.h" // for updateWindowTitle()
 #include "core/subsurface-qt/divelistnotifier.h"
 #include <QVector>
 
 namespace Command {
 
-static QUndoStack undoStack;
+static QUndoStack *undoStack;
 
 // forward declaration
 QString changesMade();
@@ -15,39 +18,41 @@ QString changesMade();
 // General commands
 void init()
 {
-	QObject::connect(&undoStack, &QUndoStack::cleanChanged, &updateWindowTitle);
+	undoStack = make_global<QUndoStack>();
+	QObject::connect(undoStack, &QUndoStack::cleanChanged, &updateWindowTitle);
+	QObject::connect(&diveListNotifier, &DiveListNotifier::dataReset, &Command::clear);
 	changesCallback = &changesMade;
 }
 
 void clear()
 {
-	undoStack.clear();
+	undoStack->clear();
 }
 
 void setClean()
 {
-	undoStack.setClean();
+	undoStack->setClean();
 }
 
 bool isClean()
 {
-	return undoStack.isClean();
+	return undoStack->isClean();
 }
 
 // this can be used to get access to the signals emitted by the QUndoStack
 QUndoStack *getUndoStack()
 {
-	return &undoStack;
+	return undoStack;
 }
 
 QAction *undoAction(QObject *parent)
 {
-	return undoStack.createUndoAction(parent, QCoreApplication::translate("Command", "&Undo"));
+	return undoStack->createUndoAction(parent, QCoreApplication::translate("Command", "&Undo"));
 }
 
 QAction *redoAction(QObject *parent)
 {
-	return undoStack.createRedoAction(parent, QCoreApplication::translate("Command", "&Redo"));
+	return undoStack->createRedoAction(parent, QCoreApplication::translate("Command", "&Redo"));
 }
 
 QString diveNumberOrDate(struct dive *d)
@@ -61,7 +66,7 @@ QString diveNumberOrDate(struct dive *d)
 QString getListOfDives(const std::vector<struct dive*> &dives)
 {
 	QString listOfDives;
-	if ((int)dives.size() == dive_table.nr)
+	if ((int)dives.size() == divelog.dives->nr)
 		return Base::tr("all dives");
 	int i = 0;
 	for (dive *d: dives) {
@@ -82,11 +87,29 @@ QString getListOfDives(QVector<struct dive *> dives)
 
 // return a string that can be used for the commit message and should list the changes that
 // were made to the dive list
+// keep in mind that the changes could have been a number of undo commands, so we might have
+// to go backwards from the last one written; this isn't perfect as a user could undo a command
+// and then do something else instead of redoing that undo - the undo information is then lost
+// for the changelog -- but of course the git history will show what happened
 QString changesMade()
 {
+	static int nextToWrite = 0;
+	int curIdx = undoStack->index();
 	QString changeTexts;
-	for (int i = 0; i < undoStack.index(); i++)
-		changeTexts += undoStack.text(i) + "\n";
+
+	if (curIdx > nextToWrite) {
+		for (int i = nextToWrite; i < curIdx; i++)
+			changeTexts += undoStack->text(i) + "\n";
+	} else if (curIdx < nextToWrite) { // we walked back undoing things
+		for (int i = nextToWrite - 1; i >= curIdx; i--)
+			changeTexts += "(undo) " + undoStack->text(i) + "\n";
+	} else if (curIdx > 0) {
+		// so this means we undid something (or more than one thing) and then did something else
+		// so we lost the information of what was undone - and how many things were changed;
+		// just show the last change
+		changeTexts += undoStack->text(curIdx - 1) + "\n";
+	}
+	nextToWrite = curIdx;
 	return changeTexts;
 }
 
@@ -95,7 +118,7 @@ bool execute(Base *cmd)
 {
 	if (cmd->workToBeDone()) {
 		executingCommand = true;
-		undoStack.push(cmd);
+		undoStack->push(cmd);
 		executingCommand = false;
 		emit diveListNotifier.commandExecuted();
 		return true;

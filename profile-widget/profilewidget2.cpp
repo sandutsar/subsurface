@@ -3,8 +3,10 @@
 #include "profile-widget/profilescene.h"
 #include "core/device.h"
 #include "core/event.h"
+#include "core/eventtype.h"
 #include "core/subsurface-string.h"
 #include "core/qthelper.h"
+#include "core/range.h"
 #include "core/settings/qPrefTechnicalDetails.h"
 #include "core/settings/qPrefPartialPressureGas.h"
 #include "profile-widget/diveeventitem.h"
@@ -40,8 +42,12 @@
 // We might add more constants here for easier customability.
 static const double thumbnailBaseZValue = 100.0;
 
-// Base of exponential zoom function: one wheel-click will increase the zoom by 15%.
-static const double zoomFactor = 1.15;
+static double calcZoom(int zoomLevel)
+{
+	// Base of exponential zoom function: one wheel-click will increase the zoom by 15%.
+	constexpr double zoomFactor = 1.15;
+	return zoomLevel == 0 ? 1.0 : pow(zoomFactor, zoomLevel);
+}
 
 ProfileWidget2::ProfileWidget2(DivePlannerPointsModel *plannerModelIn, double dpr, QWidget *parent) : QGraphicsView(parent),
 	profileScene(new ProfileScene(dpr, false, false)),
@@ -55,6 +61,7 @@ ProfileWidget2::ProfileWidget2(DivePlannerPointsModel *plannerModelIn, double dp
 	d(nullptr),
 	dc(0),
 	empty(true),
+	panning(false),
 #ifndef SUBSURFACE_MOBILE
 	mouseFollowerVertical(new DiveLineItem()),
 	mouseFollowerHorizontal(new DiveLineItem()),
@@ -104,6 +111,7 @@ ProfileWidget2::ProfileWidget2(DivePlannerPointsModel *plannerModelIn, double dp
 	connect(tec, &qPrefTechnicalDetails::show_pictures_in_profileChanged , this, &ProfileWidget2::actionRequestedReplot);
 	connect(tec, &qPrefTechnicalDetails::tankbarChanged                  , this, &ProfileWidget2::actionRequestedReplot);
 	connect(tec, &qPrefTechnicalDetails::percentagegraphChanged          , this, &ProfileWidget2::actionRequestedReplot);
+	connect(tec, &qPrefTechnicalDetails::infoboxChanged                  , this, &ProfileWidget2::actionRequestedReplot);
 
 	auto pp_gas = qPrefPartialPressureGas::instance();
 	connect(pp_gas, &qPrefPartialPressureGas::pheChanged, this, &ProfileWidget2::actionRequestedReplot);
@@ -202,14 +210,15 @@ void ProfileWidget2::plotDive(const struct dive *dIn, int dcIn, int flags)
 	DivePlannerPointsModel *model = currentState == EDIT || currentState == PLAN ? plannerModel : nullptr;
 	bool inPlanner = currentState == PLAN;
 
-	double zoom = zoomLevel == 0 ? 1.0 : pow(zoomFactor, zoomLevel);
+	double zoom = calcZoom(zoomLevel);
 	profileScene->plotDive(d, dc, model, inPlanner, flags & RenderFlags::Instant,
 			       flags & RenderFlags::DontRecalculatePlotInfo,
 			       shouldCalculateMax, zoom, zoomedPosition);
 
 #ifndef SUBSURFACE_MOBILE
-	rulerItem->setVisible(prefs.rulergraph && currentState != PLAN && currentState != EDIT);
+	toolTipItem->setVisible(prefs.infobox);
 	toolTipItem->setPlotInfo(profileScene->plotInfo);
+	rulerItem->setVisible(prefs.rulergraph && currentState != PLAN && currentState != EDIT);
 	rulerItem->setPlotInfo(d, profileScene->plotInfo);
 
 	if ((currentState == EDIT || currentState == PLAN) && plannerModel) {
@@ -233,7 +242,7 @@ void ProfileWidget2::plotDive(const struct dive *dIn, int dcIn, int flags)
 		qDebug() << "Profile calculation for dive " << d->number << "took" << elapsedTime << "ms" << " -- calculated ceiling preference is" << prefs.calcceiling;
 	if (elapsedTime > 1000 && prefs.calcndltts) {
 		qPrefTechnicalDetails::set_calcndltts(false);
-		report_error(qPrintable(tr("Show NDL / TTS was disabled because of excessive processing time")));
+		report_error("%s", qPrintable(tr("Show NDL / TTS was disabled because of excessive processing time")));
 	}
 }
 
@@ -241,9 +250,7 @@ void ProfileWidget2::divesChanged(const QVector<dive *> &dives, DiveField field)
 {
 	// If the mode of the currently displayed dive changed, replot
 	if (field.mode &&
-	    std::any_of(dives.begin(), dives.end(),
-			[id = displayed_dive.id] (const dive *d)
-			{ return d->id == id; } ))
+	    std::find(dives.begin(), dives.end(), d) != dives.end())
 		replot();
 }
 
@@ -267,24 +274,23 @@ void ProfileWidget2::resizeEvent(QResizeEvent *event)
 #ifndef SUBSURFACE_MOBILE
 void ProfileWidget2::mousePressEvent(QMouseEvent *event)
 {
-	if (zoomLevel)
-		return;
 	QGraphicsView::mousePressEvent(event);
-	if (currentState == PLAN || currentState == EDIT)
-		shouldCalculateMax = false;
+
+	if (!event->isAccepted()) {
+		panning = true;
+		panningOriginalMousePosition = mapToScene(event->pos()).x();
+		panningOriginalProfilePosition = zoomedPosition;
+		viewport()->setCursor(Qt::ClosedHandCursor);
+	}
 }
 
 void ProfileWidget2::divePlannerHandlerClicked()
 {
-	if (zoomLevel)
-		return;
 	shouldCalculateMax = false;
 }
 
 void ProfileWidget2::divePlannerHandlerReleased()
 {
-	if (zoomLevel)
-		return;
 	if (currentState == EDIT)
 		emit stopMoved(1);
 	shouldCalculateMax = true;
@@ -293,9 +299,11 @@ void ProfileWidget2::divePlannerHandlerReleased()
 
 void ProfileWidget2::mouseReleaseEvent(QMouseEvent *event)
 {
-	if (zoomLevel)
-		return;
 	QGraphicsView::mouseReleaseEvent(event);
+	if (panning) {
+		panning = false;
+		viewport()->setCursor(Qt::ArrowCursor);
+	}
 	if (currentState == PLAN || currentState == EDIT) {
 		shouldCalculateMax = true;
 		replot();
@@ -306,12 +314,6 @@ void ProfileWidget2::mouseReleaseEvent(QMouseEvent *event)
 void ProfileWidget2::setZoom(int level)
 {
 	zoomLevel = level;
-	if (zoomLevel == 0) {
-		zoomedPosition = 0.0;
-	} else {
-		double pos = mapToScene(mapFromGlobal(QCursor::pos())).x();
-		zoomedPosition = pos / profileScene->width();
-	}
 	plotDive(d, dc, RenderFlags::DontRecalculatePlotInfo);
 }
 
@@ -320,6 +322,16 @@ void ProfileWidget2::wheelEvent(QWheelEvent *event)
 {
 	if (!d)
 		return;
+	if (event->angleDelta().x() && zoomLevel > 0) {
+		double oldPos = zoomedPosition;
+		zoomedPosition = profileScene->calcZoomPosition(calcZoom(zoomLevel),
+								oldPos,
+								oldPos - event->angleDelta().x());
+		if (oldPos != zoomedPosition)
+			plotDive(d, dc, RenderFlags::Instant | RenderFlags::DontRecalculatePlotInfo);
+	}
+	if (panning)
+		return;	// No change in zoom level while panning.
 	if (event->buttons() == Qt::LeftButton)
 		return;
 	if (event->angleDelta().y() > 0 && zoomLevel < 20)
@@ -348,12 +360,16 @@ void ProfileWidget2::mouseMoveEvent(QMouseEvent *event)
 	QGraphicsView::mouseMoveEvent(event);
 
 	QPointF pos = mapToScene(event->pos());
-	toolTipItem->refresh(d, mapToScene(mapFromGlobal(QCursor::pos())), currentState == PLAN);
-
-	if (zoomLevel != 0) {
-		zoomedPosition = pos.x() / profileScene->width();
-		plotDive(d, dc, RenderFlags::Instant | RenderFlags::DontRecalculatePlotInfo); // TODO: animations don't work when scrolling
+	if (panning) {
+		double oldPos = zoomedPosition;
+		zoomedPosition = profileScene->calcZoomPosition(calcZoom(zoomLevel),
+								panningOriginalProfilePosition,
+								panningOriginalMousePosition - pos.x());
+		if (oldPos != zoomedPosition)
+			plotDive(d, dc, RenderFlags::Instant | RenderFlags::DontRecalculatePlotInfo); // TODO: animations don't work when scrolling
 	}
+
+	toolTipItem->refresh(d, mapToScene(mapFromGlobal(QCursor::pos())), currentState == PLAN);
 
 	if (currentState == PLAN || currentState == EDIT) {
 		QRectF rect = profileScene->profileRegion;
@@ -385,6 +401,7 @@ static void hideAll(const T &container)
 
 void ProfileWidget2::clear()
 {
+	currentState = INIT;
 #ifndef SUBSURFACE_MOBILE
 	clearPictures();
 #endif
@@ -393,6 +410,8 @@ void ProfileWidget2::clear()
 	handles.clear();
 	gases.clear();
 	empty = true;
+	d = nullptr;
+	dc = 0;
 }
 
 void ProfileWidget2::setProfileState(const dive *dIn, int dcIn)
@@ -415,7 +434,7 @@ void ProfileWidget2::setProfileState()
 
 #ifndef SUBSURFACE_MOBILE
 	toolTipItem->readPos();
-	toolTipItem->setVisible(true);
+	toolTipItem->setVisible(prefs.infobox);
 	rulerItem->setVisible(prefs.rulergraph);
 	mouseFollowerHorizontal->setVisible(false);
 	mouseFollowerVertical->setVisible(false);
@@ -589,9 +608,11 @@ void ProfileWidget2::contextMenuEvent(QContextMenuEvent *event)
 				      [this, seconds](){ addDivemodeSwitch(seconds, PSCR); });
 
 	if (DiveEventItem *item = dynamic_cast<DiveEventItem *>(sceneItem)) {
-		m.addAction(tr("Remove event"), [this,item] { removeEvent(item); });
-		m.addAction(tr("Hide similar events"), [this, item] { hideEvents(item); });
 		const struct event *dcEvent = item->getEvent();
+		m.addAction(tr("Remove event"), [this,item] { removeEvent(item); });
+		m.addAction(tr("Hide event"), [this, item] { hideEvent(item); });
+		m.addAction(tr("Hide events of type '%1'").arg(event_type_name(dcEvent)),
+			    [this, item] { hideEventType(item); });
 		if (dcEvent->type == SAMPLE_EVENT_BOOKMARK)
 			m.addAction(tr("Edit name"), [this, item] { editName(item); });
 #if 0 // TODO::: FINISH OR DISABLE
@@ -636,15 +657,19 @@ void ProfileWidget2::contextMenuEvent(QContextMenuEvent *event)
 		}
 #endif
 	}
-	bool some_hidden = false;
-	for (int i = 0; i < evn_used; i++) {
-		if (ev_namelist[i].plot_ev == false) {
-			some_hidden = true;
-			break;
+	if (any_event_types_hidden()) {
+		QMenu *m2 = m.addMenu(tr("Unhide event type"));
+		for (int i: hidden_event_types()) {
+			m2->addAction(event_type_name(i), [this, i]() {
+				show_event_type(i);
+				replot();
+			});
 		}
+		m2->addAction(tr("All event types"), this, &ProfileWidget2::unhideEventTypes);
 	}
-	if (some_hidden)
-		m.addAction(tr("Unhide all events"), this, &ProfileWidget2::unhideEvents);
+	if (std::any_of(profileScene->eventItems.begin(), profileScene->eventItems.end(),
+	    [] (const DiveEventItem *item) { return item->getEvent()->hidden; }))
+		m.addAction(tr("Unhide individually hidden events of this dive"), this, &ProfileWidget2::unhideEvents);
 	m.exec(event->globalPos());
 }
 
@@ -679,37 +704,36 @@ void ProfileWidget2::renameCurrentDC()
 		Command::editDeviceNickname(currentdc, newName);
 }
 
-void ProfileWidget2::hideEvents(DiveEventItem *item)
+void ProfileWidget2::hideEvent(DiveEventItem *item)
+{
+	item->getEventMutable()->hidden = true;
+	item->hide();
+}
+
+void ProfileWidget2::hideEventType(DiveEventItem *item)
 {
 	const struct event *event = item->getEvent();
 
-	if (QMessageBox::question(this,
-				  TITLE_OR_TEXT(tr("Hide events"), tr("Hide all %1 events?").arg(event->name)),
-				  QMessageBox::Ok | QMessageBox::Cancel) == QMessageBox::Ok) {
-		if (!empty_string(event->name)) {
-			for (int i = 0; i < evn_used; i++) {
-				if (same_string(event->name, ev_namelist[i].ev_name)) {
-					ev_namelist[i].plot_ev = false;
-					break;
-				}
-			}
-			Q_FOREACH (DiveEventItem *evItem, profileScene->eventItems) {
-				if (same_string(evItem->getEvent()->name, event->name))
-					evItem->hide();
-			}
-		} else {
-			item->hide();
-		}
+	if (!empty_string(event->name)) {
+		hide_event_type(event);
+
+		replot();
 	}
 }
 
 void ProfileWidget2::unhideEvents()
 {
-	for (int i = 0; i < evn_used; i++) {
-		ev_namelist[i].plot_ev = true;
-	}
-	Q_FOREACH (DiveEventItem *item, profileScene->eventItems)
+	for (DiveEventItem *item: profileScene->eventItems) {
+		item->getEventMutable()->hidden = false;
 		item->show();
+	}
+}
+
+void ProfileWidget2::unhideEventTypes()
+{
+	show_all_event_types();
+
+	replot();
 }
 
 void ProfileWidget2::removeEvent(DiveEventItem *item)
@@ -864,8 +888,8 @@ void ProfileWidget2::pointsRemoved(const QModelIndex &, int start, int end)
 
 void ProfileWidget2::pointsMoved(const QModelIndex &, int start, int end, const QModelIndex &, int row)
 {
-	moveInVector(handles, start, end + 1, row);
-	moveInVector(gases, start, end + 1, row);
+	move_in_range(handles, start, end + 1, row);
+	move_in_range(gases, start, end + 1, row);
 }
 
 void ProfileWidget2::repositionDiveHandlers()
@@ -1313,7 +1337,7 @@ void ProfileWidget2::pictureOffsetChanged(dive *dIn, QString filename, offset_t 
 			// Move image from old to new position
 			int oldIndex = oldPos - pictures.begin();
 			int newIndex = newPos - pictures.begin();
-			moveInVector(pictures, oldIndex, oldIndex + 1, newIndex);
+			move_in_range(pictures, oldIndex, oldIndex + 1, newIndex);
 		} else {
 			// Case 1b): remove picture
 			pictures.erase(oldPos);

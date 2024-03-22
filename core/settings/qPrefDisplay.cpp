@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
-#include "core/subsurface-string.h"
 #include "qPrefDisplay.h"
 #include "qPrefPrivate.h"
+#include "core/subsurface-float.h"
 
 #include <QApplication>
 #include <QFont>
@@ -67,6 +67,8 @@ void qPrefDisplay::loadSync(bool doSync)
 		load_lastState();
 		load_singleColumnPortrait();
 	}
+	disk_three_m_based_grid(doSync);
+	disk_map_short_names(doSync);
 }
 
 void qPrefDisplay::set_divelist_font(const QString &value)
@@ -94,7 +96,7 @@ void qPrefDisplay::disk_divelist_font(bool doSync)
 
 void qPrefDisplay::set_font_size(double value)
 {
-	if (!IS_FP_SAME(value, prefs.font_size)) {
+	if (!nearly_equal(value, prefs.font_size)) {
 		prefs.font_size = value;
 		disk_font_size(true);
 
@@ -119,7 +121,7 @@ void qPrefDisplay::disk_font_size(bool doSync)
 
 void qPrefDisplay::set_mobile_scale(double value)
 {
-	if (!IS_FP_SAME(value, prefs.mobile_scale)) {
+	if (!nearly_equal(value, prefs.mobile_scale)) {
 		prefs.mobile_scale = value;
 		disk_mobile_scale(true);
 
@@ -148,12 +150,16 @@ HANDLE_PREFERENCE_BOOL(Display, "displayinvalid", display_invalid_dives);
 
 HANDLE_PREFERENCE_BOOL(Display, "show_developer", show_developer);
 
+HANDLE_PREFERENCE_BOOL(Display, "three_m_based_grid", three_m_based_grid);
+
+HANDLE_PREFERENCE_BOOL(Display, "map_short_names", map_short_names);
+
 void qPrefDisplay::setCorrectFont()
 {
 	// get the font from the settings or our defaults
 	// respect the system default font size if none is explicitly set
 	QFont defaultFont = qPrefPrivate::propValue(keyFromGroupAndName(group, "divelist_font"), prefs.divelist_font).value<QFont>();
-	if (IS_FP_SAME(system_divelist_default_font_size, -1.0)) {
+	if (nearly_equal(system_divelist_default_font_size, -1.0)) {
 		prefs.font_size = qApp->font().pointSizeF();
 		system_divelist_default_font_size = prefs.font_size; // this way we don't save it on exit
 	}

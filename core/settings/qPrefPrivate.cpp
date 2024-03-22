@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "qPrefPrivate.h"
-#include "core/subsurface-string.h"
+#include "core/subsurface-float.h"
 
 #include <QSettings>
 
@@ -25,7 +25,7 @@ void qPrefPrivate::propSetValue(const QString &key, const QVariant &value, const
 #else
 	if (value.isValid() && value.type() == QVariant::Double)
 #endif
-		isDefault = IS_FP_SAME(value.toDouble(), defaultValue.toDouble());
+		isDefault = nearly_equal(value.toDouble(), defaultValue.toDouble());
 	else
 		isDefault = (value == defaultValue);
 

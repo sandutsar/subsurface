@@ -27,7 +27,7 @@ extern "C" {
 #endif
 
 struct dive;
-struct dive_computer;
+struct divelog;
 struct devices;
 
 typedef struct {
@@ -45,10 +45,9 @@ typedef struct {
 	bool libdc_log;
 	bool libdc_dump;
 	bool bluetooth_mode;
+	bool sync_time;
 	FILE *libdc_logfile;
-	struct dive_table *download_table;
-	struct dive_site_table *sites;
-	struct device_table *devices;
+	struct divelog *log;
 	void *androidUsbDeviceDescriptor;
 } device_data_t;
 

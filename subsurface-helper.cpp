@@ -2,12 +2,13 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+#ifdef MAP_SUPPORT
 #include "map-widget/qmlmapwidgethelper.h"
 #include "qt-models/maplocationmodel.h"
 #endif
 
 #include "stats/statsview.h"
+#include "core/globals.h"
 #include "core/qt-gui.h"
 #include "core/settings/qPref.h"
 #include "core/ssrf.h"
@@ -57,16 +58,14 @@ void init_ui()
 #ifndef SUBSURFACE_MOBILE
 	register_qml_types(NULL);
 
-	MainWindow *window = new MainWindow();
+	MainWindow *window = make_global<MainWindow>();
 	window->setTitle();
 #endif // SUBSURFACE_MOBILE
 }
 
 void exit_ui()
 {
-#ifndef SUBSURFACE_MOBILE
-	delete MainWindow::instance();
-#endif // SUBSURFACE_MOBILE
+	free_globals();
 	free((void *)existing_filename);
 }
 
@@ -134,8 +133,8 @@ void run_mobile_ui(double initial_font_size)
 	qmlRegisterUncreatableType<QMLManager>("org.subsurfacedivelog.mobile",1,0,"ExportType","Enum is not a type");
 
 #ifdef SUBSURFACE_MOBILE_DESKTOP
-	if (testqml) {
-		QString fileLoad(testqml);
+	if (!testqml.empty()) {
+		QString fileLoad(testqml.c_str());
 		fileLoad += "/main.qml";
 		engine.load(QUrl(fileLoad));
 	} else {
@@ -225,7 +224,7 @@ static void register_qml_types(QQmlEngine *engine)
 	register_qml_type<ChartListModel>("ChartListModel");
 #endif // not SUBSURFACE_MOBILE
 
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+#ifdef MAP_SUPPORT
 	register_qml_type<MapWidgetHelper>("MapWidgetHelper");
 	register_qml_type<MapLocationModel>("MapLocationModel");
 #endif

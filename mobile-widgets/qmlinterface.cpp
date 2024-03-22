@@ -37,10 +37,6 @@ QMLInterface::QMLInterface()
 
 	connect(qPrefDivePlanner::instance(), &qPrefDivePlanner::safetystopChanged,
 			this, &QMLInterface::safetystopChanged);
-	connect(qPrefTechnicalDetails::instance(), &qPrefTechnicalDetails::gflowChanged,
-			this, &QMLInterface::gflowChanged);
-	connect(qPrefTechnicalDetails::instance(), &qPrefTechnicalDetails::gfhighChanged,
-			this, &QMLInterface::gfhighChanged);
 	connect(qPrefTechnicalDetails::instance(), &qPrefTechnicalDetails::vpmb_conservatismChanged,
 			this, &QMLInterface::vpmb_conservatismChanged);
 	connect(qPrefDivePlanner::instance(), &qPrefDivePlanner::drop_stone_modeChanged,
@@ -79,6 +75,9 @@ QMLInterface::QMLInterface()
 			this, &QMLInterface::verbatim_planChanged);
 	connect(qPrefDivePlanner::instance(), &qPrefDivePlanner::display_variationsChanged,
 			this, &QMLInterface::display_variationsChanged);
+
+	connect(qPrefDiveComputer::instance(), &qPrefDiveComputer::sync_dc_timeChanged,
+			this, &QMLInterface::sync_dc_timeChanged);
 }
 
 void QMLInterface::setup(QQmlContext *ct)

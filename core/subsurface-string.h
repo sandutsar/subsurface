@@ -22,13 +22,11 @@
 	(void) (&_max1 == &_max2);      \
 	_max1 > _max2 ? _max1 : _max2; })
 
-#define IS_FP_SAME(_a, _b) (fabs((_a) - (_b)) <= 0.000001 * MAX(fabs(_a), fabs(_b)))
-
-// string handling
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// string handling
 
 static inline bool same_string(const char *a, const char *b)
 {
@@ -62,5 +60,21 @@ extern double strtod_flags(const char *str, const char **ptr, unsigned int flags
 
 #ifdef __cplusplus
 }
+
+#include <string>
+template <class... Args>
+std::string format_string_std(const char *fmt, Args&&... args)
+{
+	size_t stringsize = snprintf(NULL, 0, fmt, std::forward<Args>(args)...);
+	if (stringsize == 0)
+		return std::string();
+	std::string res;
+	res.resize(stringsize); // Pointless clearing, oh my.
+	// This overwrites the terminal null-byte of std::string.
+	// That's probably "undefined behavior". Oh my.
+	snprintf(res.data(), stringsize + 1, fmt, std::forward<Args>(args)...);
+	return res;
+}
+
 #endif
 #endif // SUBSURFACE_STRING_H

@@ -2,8 +2,11 @@
 #include "desktop-widgets/downloadfromdivecomputer.h"
 #include "commands/command.h"
 #include "core/qthelper.h"
+#include "core/device.h"
 #include "core/divelist.h"
+#include "core/divelog.h"
 #include "core/settings/qPrefDiveComputer.h"
+#include "core/subsurface-float.h"
 #include "core/subsurface-string.h"
 #include "core/uemis.h"
 #include "core/downloadfromdcthread.h"
@@ -17,6 +20,11 @@
 #include <QShortcut>
 #include <QTimer>
 #include <QUndoStack>
+
+static bool is_vendor_searchable(QString vendor)
+{
+	return vendor == "Uemis" || vendor == "Garmin";
+}
 
 DownloadFromDCWidget::DownloadFromDCWidget(QWidget *parent) : QDialog(parent, QFlag(0)),
 	downloading(false),
@@ -50,7 +58,9 @@ DownloadFromDCWidget::DownloadFromDCWidget(QWidget *parent) : QDialog(parent, QF
 	ui.selectAllButton->setEnabled(false);
 	ui.unselectAllButton->setEnabled(false);
 	ui.vendor->setModel(&vendorModel);
+	ui.search->setEnabled(is_vendor_searchable(ui.vendor->currentText()));
 	ui.product->setModel(&productModel);
+	ui.syncDiveComputerTime->setChecked(prefs.sync_dc_time);
 
 	progress_bar_text = "";
 
@@ -63,6 +73,7 @@ DownloadFromDCWidget::DownloadFromDCWidget(QWidget *parent) : QDialog(parent, QF
 	connect(ui.logToFile, SIGNAL(stateChanged(int)), this, SLOT(checkLogFile(int)));
 	connect(ui.selectAllButton, SIGNAL(clicked()), diveImportedModel, SLOT(selectAll()));
 	connect(ui.unselectAllButton, SIGNAL(clicked()), diveImportedModel, SLOT(selectNone()));
+	connect(ui.syncDiveComputerTime, &QAbstractButton::toggled, qPrefDiveComputer::instance(), &qPrefDiveComputer::set_sync_dc_time);
 	connect(timer, SIGNAL(timeout()), this, SLOT(updateProgressBar()));
 	connect(close, SIGNAL(activated()), this, SLOT(close()));
 	connect(quit, SIGNAL(activated()), parent, SLOT(close()));
@@ -140,10 +151,13 @@ void DownloadFromDCWidget::DC##num##Clicked() \
 	ui.vendor->setCurrentIndex(ui.vendor->findText(qPrefDiveComputer::vendor##num())); \
 	productModel.setStringList(productList[qPrefDiveComputer::vendor##num()]); \
 	ui.product->setCurrentIndex(ui.product->findText(qPrefDiveComputer::product##num())); \
-	ui.bluetoothMode->setChecked(isBluetoothAddress(qPrefDiveComputer::device##num())); \
-	if (ui.device->currentIndex() == -1) \
+	bool isBluetoothDevice = isBluetoothAddress(qPrefDiveComputer::device##num()); \
+	bool isMacOs = QSysInfo::kernelType() == "darwin"; \
+	ui.bluetoothMode->setChecked(isBluetoothDevice); \
+	if (ui.device->currentIndex() == -1 || (isBluetoothDevice && !isMacOs)) \
+		/* macOS seems to have a problem connecting to remembered bluetooth devices  if it hasn't already had a connection in the current session */ \
 		ui.device->setCurrentIndex(deviceIndex(qPrefDiveComputer::device##num())); \
-	if (QSysInfo::kernelType() == "darwin") { \
+	if (isMacOs) { \
 		/* it makes no sense that this would be needed on macOS but not Linux */ \
 		QCoreApplication::processEvents(); \
 		ui.vendor->update(); \
@@ -169,8 +183,6 @@ void DownloadFromDCWidget::DC##num##Clicked() \
 }
 #endif
 
-
-
 DCBUTTON(1)
 DCBUTTON(2)
 DCBUTTON(3)
@@ -183,7 +195,7 @@ void DownloadFromDCWidget::updateProgressBar()
 	if (empty_string(last_text)) {
 		// if we get the first actual text after the download is finished
 		// (which happens for example on the OSTC), then don't bother
-		if (!empty_string(progress_bar_text) && IS_FP_SAME(progress_bar_fraction, 1.0))
+		if (!empty_string(progress_bar_text) && nearly_equal(progress_bar_fraction, 1.0))
 			progress_bar_text = "";
 	}
 	if (!empty_string(progress_bar_text)) {
@@ -195,7 +207,7 @@ void DownloadFromDCWidget::updateProgressBar()
 		ui.progressText->setText(progress_bar_text);
 #endif
 	} else {
-		if (IS_FP_SAME(progress_bar_fraction, 0.0)) {
+		if (nearly_0(progress_bar_fraction)) {
 			// while we are waiting to connect, set the maximum to 0 so we get a busy indication
 			ui.progressBar->setMaximum(0);
 			ui.progressBar->setFormat(tr("Connecting to dive computer"));
@@ -320,6 +332,7 @@ void DownloadFromDCWidget::on_vendor_currentTextChanged(const QString &vendor)
 	descriptor = descriptorLookup.value(ui.vendor->currentText().toLower() + ui.product->currentText().toLower());
 	transport = dc_descriptor_get_transports(descriptor);
 	fill_device_list(transport);
+	ui.search->setEnabled(is_vendor_searchable(vendor));
 }
 
 void DownloadFromDCWidget::on_product_currentTextChanged(const QString &)
@@ -343,7 +356,7 @@ void DownloadFromDCWidget::on_device_currentTextChanged(const QString &device)
 
 void DownloadFromDCWidget::on_search_clicked()
 {
-	if (ui.vendor->currentText() == "Uemis" || ui.vendor->currentText() == "Garmin") {
+	if (is_vendor_searchable(ui.vendor->currentText())) {
 		QString dialogTitle = ui.vendor->currentText() == "Uemis" ?
 					tr("Find Uemis dive computer") : tr("Find Garmin dive computer");
 		QString dirName = QFileDialog::getExistingDirectory(this,
@@ -408,13 +421,14 @@ void DownloadFromDCWidget::on_downloadCancelRetryButton_clicked()
 	data->setForceDownload(ui.forceDownload->isChecked());
 	data->setSaveLog(ui.logToFile->isChecked());
 	data->setSaveDump(ui.dumpToFile->isChecked());
+	data->setSyncTime(ui.syncDiveComputerTime->isChecked());
 
 	qPrefDiveComputer::set_vendor(data->vendor());
 	qPrefDiveComputer::set_product(data->product());
 	qPrefDiveComputer::set_device(data->devName());
 
 	// before we start, remember where the dive_table ended
-	previousLast = dive_table.nr;
+	previousLast = divelog.dives->nr;
 	diveImportedModel->startDownload();
 
 	// FIXME: We should get the _actual_ device info instead of whatever
@@ -571,6 +585,7 @@ void DownloadFromDCWidget::markChildrenAsDisabled()
 	ui.unselectAllButton->setEnabled(false);
 	ui.bluetoothMode->setEnabled(false);
 	ui.chooseBluetoothDevice->setEnabled(false);
+	ui.syncDiveComputerTime->setEnabled(false);
 }
 
 void DownloadFromDCWidget::markChildrenAsEnabled()
@@ -594,6 +609,7 @@ void DownloadFromDCWidget::markChildrenAsEnabled()
 	ui.bluetoothMode->setEnabled(true);
 	ui.chooseBluetoothDevice->setEnabled(true);
 #endif
+	ui.syncDiveComputerTime->setEnabled(true);
 }
 
 #if defined(BT_SUPPORT)

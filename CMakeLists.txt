@@ -20,6 +20,7 @@ endif ()
 
 set(CMAKE_MODULE_PATH
 	${${PROJECT_NAME}_SOURCE_DIR}/cmake/Modules
+	${${PROJECT_NAME}_SOURCE_DIR}/../install-root/lib/cmake
 	${CMAKE_MODULE_PATH}
 )
 
@@ -54,6 +55,9 @@ option(FTDISUPPORT "enable support for libftdi based serial" OFF)
 
 # Options regarding What should we build on subsurface
 option(MAKE_TESTS "Make the tests" ON)
+
+# Option whether we should try to build against Qt6, if it is available
+option(BUILD_WITH_QT6 "try to build against Qt6 (incomplete)" OFF)
 
 SET(SUBSURFACE_TARGET_EXECUTABLE "DesktopExecutable" CACHE STRING "The type of application, DesktopExecutable, MobileExecutable, or DownloaderExecutable")
 LIST(APPEND SUBSURFACE_ACCEPTED_EXECUTABLES  "DesktopExecutable" "MobileExecutable" "DownloaderExecutable")
@@ -141,9 +145,6 @@ include(pkgconfig_helper)
 # module file.
 include(HandleFindGit2)
 include(HandleFindLibDiveComputer)
-if (SUBSURFACE_TARGET_EXECUTABLE MATCHES "DesktopExecutable")
-	include(HandleUserManual)
-endif()
 include(HandleFtdiSupport)
 include(HandleVersionGeneration)
 include(RunOnBuildDir)
@@ -151,7 +152,7 @@ include(cmake_variables_helper)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 	include_directories(${CMAKE_OSX_SYSROOT}/usr/include/libxml2)
-	set(SUBSURFACE_LINK_LIBRARIES ${SUBSURFACE_LINK_LIBRARIES} -lxml2 -lxslt -lsqlite3)
+	LIST(APPEND SUBSURFACE_LINK_LIBRARIES -lxml2 -lxslt -lsqlite3)
 else()
 	pkg_config_library(LIBXML libxml-2.0 REQUIRED)
 	pkg_config_library(LIBSQLITE3 sqlite3 REQUIRED)
@@ -173,8 +174,19 @@ include_directories(.
 	${CMAKE_BINARY_DIR}/desktop-widgets
 )
 
+# decide what to do about Qt
+# this is messy because we want to support older Qt5 versions, newer Qt5 versions,
+# and Qt6 when enabled / available.
+if(BUILD_WITH_QT6)
+	set(CHECK_QT6 "Qt6")
+endif()
+
 # figure out which version of Qt we are building against
-find_package(QT NAMES Qt6 Qt5 COMPONENTS Widgets REQUIRED)
+# in theory this should get us all the variables set up correctly, but that
+# ended up failing in subtle ways to do what was advertized; in the Qt5 case
+# some of the variables didn't get set up, so we'll immediately call it again
+# for Qt5
+find_package(QT NAMES ${CHECK_QT6} Qt5 REQUIRED COMPONENTS Core Widgets)
 
 # right now there are a few things that don't work with Qt6
 # let's disable them right here and remember our Qt version
@@ -188,12 +200,38 @@ if(QT_VERSION_MAJOR STREQUAL "6")
 	# QtWebKit doesn't work with Qt6, so no printing, no manual
 	set(NO_PRINTING ON)
 	set(NO_USERMANUAL ON)
+
+	# as of Qt 6.3 by default QtLocation isn't included, but one can
+	# build the module from source; so let's look if the user has installed
+	# it (or if a newer version is out that includes it, anyway)
+	find_package(Qt6 COMPONENTS Location)
+	if(Qt6Location_FOUND)
+		message(STATUS "Found Qt6Location")
+		LIST(APPEND QT_EXTRA_COMPONENTS Location)
+		add_definitions(-DMAP_SUPPORT)
+		set(MAPSUPPORT ON)
+
+		# at least on macOS something goes sideways and we fail to load the
+		# QML files with a weird error about Qml.WorkerScript missing
+		# linking Subsurface against that component appears enough to hack
+		# around that, but that feels... wrong
+		if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+			find_package(Qt6 COMPONENTS QmlWorkerScript)
+			LIST(APPEND SUBSURFACE_LINK_LIBRARIES Qt6::QmlWorkerScript)
+		endif()
+	endif()
 else()
+	# as mentioned above, since some variables appear to fail to populate
+	# on some platforms, simply run this again the 'old' way
+	find_package(Qt5 REQUIRED COMPONENTS Core Widgets)
 	set(USINGQT6 OFF)
 	set(QT5OR6 "5")
 	set(QT_VERSION ${Qt5_VERSION})
+	set(QT_INSTALL_PREFIX ${_qt5Core_install_prefix})
 	# for Qt5 we want the Location component (which is missing so far in Qt6)
 	LIST(APPEND QT_EXTRA_COMPONENTS Location)
+	add_definitions(-DMAP_SUPPORT)
+	set(MAPSUPPORT ON)
 endif()
 message(STATUS "building with Qt ${QT_VERSION}")
 
@@ -208,14 +246,32 @@ if (SUBSURFACE_TARGET_EXECUTABLE MATCHES "DesktopExecutable")
 	endif()
 	list(APPEND QT_EXTRA_COMPONENTS QuickWidgets)
 	remove_definitions(-DSUBSURFACE_MOBILE)
+	if(NO_USERMANUAL)
+		message(STATUS "building without built-in user manual support")
+		add_definitions(-DNO_USERMANUAL)
+	else()
+		set(REQUEST_WEBKIT ON)
+	endif()
 	if(NO_PRINTING)
 		message(STATUS "building without printing support")
 		add_definitions(-DNO_PRINTING)
 	else()
-		LIST(APPEND QT_EXTRA_COMPONENTS PrintSupport)
+		set(REQUEST_WEBKIT ON)
+	endif()
+	if(REQUEST_WEBKIT)
 		# Because Qt5WebKitWidgets isn't a part of the "regular" Qt5, we can't get it the normal way
-		find_package(Qt5WebKitWidgets REQUIRED)
-		set(SUBSURFACE_LINK_LIBRARIES ${SUBSURFACE_LINK_LIBRARIES} Qt5::WebKitWidgets)
+		find_package(Qt5WebKitWidgets QUIET)
+		if(Qt5WebKitWidgets_FOUND STREQUAL "1")
+			LIST(APPEND QT_EXTRA_COMPONENTS PrintSupport WebKitWidgets)
+			LIST(APPEND SUBSURFACE_LINK_LIBRARIES Qt5::WebKitWidgets)
+			message(STATUS "building with QtWebKit")
+		else()
+			message(STATUS "didn't find QtWebKit, building without user manual and printing support")
+			add_definitions(-DNO_PRINTING)
+			add_definitions(-DNO_USERMANUAL)
+			set(NO_PRINTING ON)
+			set(NO_USERMANUAL ON)
+		endif()
 	endif()
 elseif (SUBSURFACE_TARGET_EXECUTABLE MATCHES "MobileExecutable")
 	if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
@@ -234,10 +290,10 @@ elseif (SUBSURFACE_TARGET_EXECUTABLE MATCHES "MobileExecutable")
 	set(BTSUPPORT ON)
 elseif (SUBSURFACE_TARGET_EXECUTABLE MATCHES "DownloaderExecutable")
 	if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-                set(SUBSURFACE_TARGET Subsurface-downloader)
-        else()
-                set(SUBSURFACE_TARGET subsurface-downloader)
-        endif()
+		set(SUBSURFACE_TARGET Subsurface-downloader)
+	else()
+		set(SUBSURFACE_TARGET subsurface-downloader)
+	endif()
 	set(BTSUPPORT ON)
 	add_definitions(-DSUBSURFACE_DOWNLOADER)
 	message(STATUS "building the embedded Subsurface-downloader app")
@@ -248,30 +304,30 @@ if(ANDROID)
 	set(NO_USERMANUAL ON)
 	set(MAKE_TESTS OFF)
 	list(APPEND QT_EXTRA_COMPONENTS AndroidExtras)
-	set(SUBSURFACE_LINK_LIBRARIES ${SUBSURFACE_LINK_LIBRARIES} -llog)
+	LIST(APPEND SUBSURFACE_LINK_LIBRARIES -llog)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	# add pthread to the end of the library list on Linux
 	# this is only needed on Ubuntu
 	# but shouldn't hurt on other Linux versions
 	# in some builds we appear to be missing libz for some strange reason...
-	set(SUBSURFACE_LINK_LIBRARIES ${SUBSURFACE_LINK_LIBRARIES} -lz -lpthread)
+	LIST(APPEND SUBSURFACE_LINK_LIBRARIES -lz -lpthread)
 
 	# Test for ARM processor (Raspberry Pi) and add libGLESv2 if found
 	if (CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "armv6l")
 		message (STATUS "Found ARM processor. Adding libGLESv2")
-		set(SUBSURFACE_LINK_LIBRARIES ${SUBSURFACE_LINK_LIBRARIES} -lGLESv2)
+		LIST(APPEND SUBSURFACE_LINK_LIBRARIES -lGLESv2)
 		set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 	endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 	execute_process(
-		COMMAND sh scripts/get-version linux
+		COMMAND bash scripts/get-version
 		WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 		OUTPUT_VARIABLE SSRF_VERSION_STRING
 		OUTPUT_STRIP_TRAILING_WHITESPACE
 	)
 	find_library(APP_SERVICES_LIBRARY ApplicationServices)
 	find_library(HID_LIB HidApi)
-	set(SUBSURFACE_LINK_LIBRARIES ${SUBSURFACE_LINK_LIBRARIES} ${HID_LIB})
+	LIST(APPEND SUBSURFACE_LINK_LIBRARIES ${HID_LIB})
 	set(EXTRA_LIBS ${APP_SERVICES_LIBRARY})
 	set(ICON_FILE ${CMAKE_SOURCE_DIR}/packaging/macosx/Subsurface.icns)
 	if (SUBSURFACE_TARGET_EXECUTABLE MATCHES "MobileExecutable")
@@ -290,7 +346,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 	set_source_files_properties(${ICON_FILE} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
 	set(SUBSURFACE_PKG MACOSX_BUNDLE ${ICON_FILE})
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-	set(SUBSURFACE_LINK_LIBRARIES ${SUBSURFACE_LINK_LIBRARIES} -lwsock32 -lws2_32)
+	LIST(APPEND SUBSURFACE_LINK_LIBRARIES -lwsock32 -lws2_32)
 	remove_definitions(-DUNICODE)
 	add_definitions(-mwindows -D_WIN32)
 endif()
@@ -332,9 +388,13 @@ if(NOT ANDROID)
 endif()
 
 #set up the subsurface_link_libraries variable
-set(SUBSURFACE_LINK_LIBRARIES ${SUBSURFACE_LINK_LIBRARIES} ${LIBDIVECOMPUTER_LIBRARIES} ${LIBGIT2_LIBRARIES} ${LIBUSB_LIBRARIES} ${LIBMTP_LIBRARIES})
+LIST(APPEND SUBSURFACE_LINK_LIBRARIES ${LIBDIVECOMPUTER_LIBRARIES} ${LIBGIT2_LIBRARIES} ${LIBUSB_LIBRARIES} ${LIBMTP_LIBRARIES})
 if (NOT SUBSURFACE_TARGET_EXECUTABLE MATCHES "DownloaderExecutable")
 	if(USINGQT6)
+		if(MAPSUPPORT)
+			qt_add_resources(SUBSURFACE_RESOURCES map-widget/qml/map-widget.qrc)
+			set(SUBSURFACE_MAPWIDGET subsurface_mapwidget)
+		endif()
 		qt_add_resources(SUBSURFACE_RESOURCES subsurface.qrc profile.qrc stats/statsicons.qrc desktop-widgets/qml/statsview2.qrc)
 	else()
 		qt5_add_resources(SUBSURFACE_RESOURCES subsurface.qrc profile.qrc stats/statsicons.qrc map-widget/qml/map-widget.qrc desktop-widgets/qml/statsview2.qrc)
@@ -344,7 +404,7 @@ endif()
 
 # hack to build successfully on LGTM
 if(DEFINED ENV{LGTM_SRC})
-	set(SUBSURFACE_LINK_LIBRARIES ${SUBSURFACE_LINK_LIBRARIES} -lgssapi_krb5 -lhttp_parser)
+	LIST(APPEND SUBSURFACE_LINK_LIBRARIES -lgssapi_krb5 -lhttp_parser)
 endif()
 
 # include translations
@@ -356,7 +416,7 @@ add_subdirectory(qt-models)
 add_subdirectory(commands)
 if (NOT SUBSURFACE_TARGET_EXECUTABLE MATCHES "DownloaderExecutable")
 add_subdirectory(profile-widget)
-if(NOT USINGQT6)
+if(MAPSUPPORT)
 add_subdirectory(map-widget)
 endif()
 add_subdirectory(mobile-widgets)
@@ -433,7 +493,6 @@ elseif (SUBSURFACE_TARGET_EXECUTABLE MATCHES "DesktopExecutable")
 		subsurface_generated_ui
 		subsurface_interface
 		subsurface_profile
-		subsurface_statistics
 		${SUBSURFACE_MAPWIDGET}
 		subsurface_backend_shared
 		subsurface_models_desktop
@@ -443,7 +502,6 @@ elseif (SUBSURFACE_TARGET_EXECUTABLE MATCHES "DesktopExecutable")
 		${SUBSURFACE_LINK_LIBRARIES}
 	)
 	add_dependencies(subsurface_desktop_preferences subsurface_generated_ui)
-	add_dependencies(subsurface_statistics subsurface_generated_ui)
 	add_dependencies(subsurface_interface subsurface_generated_ui)
 	add_dependencies(subsurface_profile subsurface_generated_ui)
 	add_dependencies(subsurface_models_desktop subsurface_generated_ui)
@@ -487,7 +545,6 @@ set(DOCFILES
 	${CMAKE_BINARY_DIR}/Documentation/user-manual.html
 	${CMAKE_BINARY_DIR}/Documentation/user-manual_es.html
 	${CMAKE_BINARY_DIR}/Documentation/user-manual_fr.html
-	${CMAKE_BINARY_DIR}/Documentation/user-manual_ru.html
 )
 
 # add all the translations that we may need
@@ -539,26 +596,35 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 	install(FILES ${QTTRANSLATIONS} DESTINATION ${RESOURCEDIR}/translations)
 	install(FILES ${CMAKE_SOURCE_DIR}/gpl-2.0.txt DESTINATION ${RESOURCEDIR})
 	install(CODE "execute_process(COMMAND mkdir -p ${RESOURCEDIR}/qml)")
-	if(QT_VERSION VERSION_LESS 6.0.0)
+	if(USINGQT6)
+		set(QT_INSTALL_PREFIX ${QT6_INSTALL_PREFIX})
+	else()
 		set(QT_INSTALL_PREFIX ${_qt5Core_install_prefix})
+	endif()
+	if(MAPSUPPORT)
 		install(CODE "execute_process(COMMAND mkdir -p ${PLUGINDIR}/geoservices)")
+		# this is really weird. We first try a plugin that ended up in the Qt install prefix
+		# then we try one that's in that odd broken install location that the qmake file results in (that includes the QT_INSTALL_PREFIX after our INSTALL_ROOT
+		# and finally, for fat binaries, we copy the one that's in the 'logical' spot under the INSTALL_ROOT
+		# this should cover all cases and always get us the correct library
 		install(CODE "execute_process(COMMAND cp ${QT_INSTALL_PREFIX}/plugins/geoservices/libqtgeoservices_googlemaps.dylib ${PLUGINDIR}/geoservices ERROR_QUIET)")
 		install(CODE "execute_process(COMMAND cp ${CMAKE_SOURCE_DIR}/../install-root/${QT_INSTALL_PREFIX}/plugins/geoservices/libqtgeoservices_googlemaps.dylib ${PLUGINDIR}/geoservices ERROR_QUIET)")
-	else()
-		set(QT_INSTALL_PREFIX ${QT6_INSTALL_PREFIX})
+		install(CODE "execute_process(COMMAND cp ${CMAKE_SOURCE_DIR}/../install-root/plugins/geoservices/libqtgeoservices_googlemaps.dylib ${PLUGINDIR}/geoservices ERROR_QUIET)")
 	endif()
 	# this will fail is macdeployqt isn't in the PATH - that seemed to happen in the past, but not recently
 	# also, on M1 macOS systems macdeployqt throws a ton of (apparently harmless) errors. Warn the unsuspecting developer
-	if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
-		install(CODE "execute_process(COMMAND echo the following macdeployqt command will spew out a ton of harmless otool output parsing errors)")
-	endif()
 	install(CODE "execute_process(COMMAND macdeployqt ${APP_BUNDLE_DIR} -no-strip ${MACDEPLOY_ARGS})")
 	# the next hack is here to delete the sqlite plugin that get's installed even though it isn't needed
 	install(CODE "execute_process(COMMAND rm -rf ${CMAKE_BINARY_DIR}/${APP_BUNDLE_DIR}/Contents/PlugIns/sqldrivers)")
 	# and another hack to get the QML Components in the right place
-	if(QT_VERSION VERSION_LESS 6.0.0)
-		install(CODE "execute_process(COMMAND rm -rf ${CMAKE_BINARY_DIR}/${APP_BUNDLE_DIR}/Contents/Resources/qml/{QtQuick.2,QtLocation,QtPositioning})")
-		install(CODE "execute_process(COMMAND cp -a ${QT_INSTALL_PREFIX}/qml/QtQuick.2 ${CMAKE_BINARY_DIR}/${APP_BUNDLE_DIR}/Contents/Resources/qml)")
+	if(MAPSUPPORT)
+		if (USINGQT6)
+			install(CODE "execute_process(COMMAND rm -rf ${CMAKE_BINARY_DIR}/${APP_BUNDLE_DIR}/Contents/Resources/qml/{QtQuick,QtLocation,QtPositioning})")
+			install(CODE "execute_process(COMMAND cp -a ${QT_INSTALL_PREFIX}/qml/QtQuick ${CMAKE_BINARY_DIR}/${APP_BUNDLE_DIR}/Contents/Resources/qml)")
+		else()
+			install(CODE "execute_process(COMMAND rm -rf ${CMAKE_BINARY_DIR}/${APP_BUNDLE_DIR}/Contents/Resources/qml/{QtQuick.2,QtLocation,QtPositioning})")
+			install(CODE "execute_process(COMMAND cp -a ${QT_INSTALL_PREFIX}/qml/QtQuick.2 ${CMAKE_BINARY_DIR}/${APP_BUNDLE_DIR}/Contents/Resources/qml)")
+		endif()
 		install(CODE "execute_process(COMMAND cp -a ${QT_INSTALL_PREFIX}/qml/QtLocation ${CMAKE_BINARY_DIR}/${APP_BUNDLE_DIR}/Contents/Resources/qml)")
 	endif()
 	install(CODE "execute_process(COMMAND cp -a ${QT_INSTALL_PREFIX}/qml/QtPositioning ${CMAKE_BINARY_DIR}/${APP_BUNDLE_DIR}/Contents/Resources/qml)")
@@ -613,7 +679,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 	if(NOT QT_VERSION VERSION_LESS 5.11.0)
 		# hack to work around the fact that we don't process the dependencies of plugins
 		# as of Qt 5.11 this additional DLL is needed and it's only referenced in the qml DLLs
-		install(FILES ${QT_INSTALL_PREFIX}/bin/QtPositioningQuick.dll DESTINATION ${WINDOWSSTAGING})
+		install(FILES ${QT_INSTALL_PREFIX}/bin/Qt5PositioningQuick.dll DESTINATION ${WINDOWSSTAGING})
 	endif()
 
 	if(NOT DEFINED MAKENSIS)
@@ -654,8 +720,8 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	endif()
 	install(FILES subsurface.debug DESTINATION bin)
 	install(FILES subsurface.desktop DESTINATION share/applications)
-	install(CODE "execute_process(COMMAND sh ${CMAKE_SOURCE_DIR}/scripts/add-version-to-appdata.sh WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})")
-	install(FILES appdata/subsurface.appdata.xml DESTINATION share/metainfo)
+	install(CODE "execute_process(COMMAND sh ${CMAKE_SOURCE_DIR}/scripts/add-version-to-metainfo.sh WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})")
+	install(FILES metainfo/subsurface.metainfo.xml DESTINATION share/metainfo)
 	install(FILES icons/subsurface-icon.svg DESTINATION share/icons/hicolor/scalable/apps)
 	install(DIRECTORY Documentation/images DESTINATION share/subsurface/Documentation)
 	install(FILES ${DOCFILES} DESTINATION share/subsurface/Documentation)

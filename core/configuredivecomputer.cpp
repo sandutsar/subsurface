@@ -65,7 +65,7 @@ static QString writeGasDetails(gas g)
 		}).join(QLatin1Char(','));
 }
 
-bool ConfigureDiveComputer::saveXMLBackup(QString fileName, DeviceDetails *details, device_data_t *data)
+bool ConfigureDiveComputer::saveXMLBackup(const QString &fileName, DeviceDetails *details, device_data_t *data)
 {
 	QString xml = "";
 	QString vendor = data->vendor;
@@ -192,7 +192,7 @@ bool ConfigureDiveComputer::saveXMLBackup(QString fileName, DeviceDetails *detai
 	return true;
 }
 
-bool ConfigureDiveComputer::restoreXMLBackup(QString fileName, DeviceDetails *details)
+bool ConfigureDiveComputer::restoreXMLBackup(const QString &fileName, DeviceDetails *details)
 {
 	QFile file(fileName);
 	if (!file.open(QIODevice::ReadOnly)) {
@@ -491,13 +491,13 @@ bool ConfigureDiveComputer::restoreXMLBackup(QString fileName, DeviceDetails *de
 	return true;
 }
 
-void ConfigureDiveComputer::startFirmwareUpdate(QString fileName, device_data_t *data)
+void ConfigureDiveComputer::startFirmwareUpdate(const QString &fileName, device_data_t *data, bool forceUpdate)
 {
 	setState(FWUPDATE);
 	if (firmwareThread)
 		firmwareThread->deleteLater();
 
-	firmwareThread = new FirmwareUpdateThread(this, data, fileName);
+	firmwareThread = new FirmwareUpdateThread(this, data, fileName, forceUpdate);
 	connectThreadSignals(firmwareThread);
 
 	firmwareThread->start();
@@ -530,7 +530,7 @@ void ConfigureDiveComputer::setState(ConfigureDiveComputer::states newState)
 void ConfigureDiveComputer::setError(QString err)
 {
 	lastError = err;
-	emit error(err);
+	emit error(std::move(err));
 }
 
 void ConfigureDiveComputer::readThreadFinished()
@@ -594,7 +594,7 @@ QString ConfigureDiveComputer::dc_open(device_data_t *data)
 	rc = divecomputer_device_open(data);
 
 	if (rc != DC_STATUS_SUCCESS) {
-		report_error(errmsg(rc));
+		report_error("%s", errmsg(rc));
 	} else {
 		rc = dc_device_open(&data->device, data->context, data->descriptor, data->iostream);
 	}

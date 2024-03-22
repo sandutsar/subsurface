@@ -8,13 +8,13 @@
 ![Build Status](https://github.com/subsurface/subsurface/workflows/Linux%20Snap/badge.svg)
 ![Build Status](https://github.com/subsurface/subsurface/workflows/Ubuntu%2014.04%20/%20Qt%205.12%20for%20AppImage--/badge.svg)
 ![Build Status](https://github.com/subsurface/subsurface/workflows/Ubuntu%2018.04%20/%20Qt%205.9--/badge.svg)
-![Build Status](https://github.com/subsurface/subsurface/workflows/Ubuntu%2020.10%20/%20Qt%205.14--/badge.svg)
-![Build Status](https://github.com/subsurface/subsurface/workflows/openSUSE/Tumbleweed%20/%20Qt%20latest--/badge.svg)
+![Build Status](https://github.com/subsurface/subsurface/workflows/Ubuntu%2020.04%20/%20Qt%205.12--/badge.svg)
+![Build Status](https://github.com/subsurface/subsurface/workflows/Ubuntu%2022.04%20/%20Qt%205.15--/badge.svg)
 
-This is the README file for Subsurface 5.0.6
+This is the README file for Subsurface 5.0.10
 
 Please check the `ReleaseNotes.txt` for details about new features and
-changes since Subsurface 5.0.5 (and earlier versions).
+changes since Subsurface 5.0.9 (and earlier versions).
 
 Subsurface can be found at http://subsurface-divelog.org
 
@@ -28,7 +28,8 @@ We frequently make new test versions of Subsurface available at
 http://subsurface-divelog.org/downloads/test/ and there you can always get
 the latest builds for Mac, Windows, Linux AppImage and Android (with some
 caveats about installability). Additionally, those same versions are
-posted to the Subsurface-daily repos on Launchpad and OBS.
+posted to the Subsurface-daily repos on Ubuntu Launchpad, Fedora COPR, and
+OpenSUSE OBS.
 
 These tend to contain the latest bug fixes and features, but also
 occasionally the latest bugs and issues. Please understand when using them
@@ -49,10 +50,10 @@ development version) you can either get this via git or the release tar
 ball. After cloning run the following command:
 
 ```
-git checkout v5.0.6  (or whatever the last release is)
+git checkout v5.0.10  (or whatever the last release is)
 ```
 
-or download a tarball from http://subsurface-divelog.org/downloads/Subsurface-5.0.6.tgz
+or download a tarball from http://subsurface-divelog.org/downloads/Subsurface-5.0.10.tgz
 
 Detailed build instructions can be found in the INSTALL file.
 

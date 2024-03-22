@@ -270,6 +270,22 @@ Kirigami.ApplicationWindow {
 						visible: text.length > 0
 						level: 5
 						color: "white"
+						text: manager.passwordState
+						wrapMode: Text.NoWrap
+						elide: Text.ElideRight
+						font.weight: Font.Normal
+					}
+				}
+
+				RowLayout {
+					Layout.leftMargin: Kirigami.Units.smallSpacing
+					Layout.topMargin: 0
+					Kirigami.Heading {
+						Layout.fillWidth: true
+						Layout.topMargin: 0
+						visible: text.length > 0
+						level: 5
+						color: "white"
 						text: manager.syncState
 						wrapMode: Text.NoWrap
 						elide: Text.ElideRight
@@ -334,7 +350,7 @@ Kirigami.ApplicationWindow {
 						name: ":/icons/cloud_sync.svg"
 					}
 					text: qsTr("Manual sync with cloud")
-					enabled: Backend.cloud_verification_status === Enums.CS_VERIFIED
+					visible: Backend.cloud_verification_status !== Enums.CS_NOCLOUD
 					onTriggered: {
 						globalDrawer.close()
 						detailsWindow.endEditMode()
@@ -344,14 +360,14 @@ Kirigami.ApplicationWindow {
 					}
 				}
 				Kirigami.Action {
-				icon {
-					name: PrefCloudStorage.cloud_auto_sync ?  ":/icons/ic_cloud_off.svg" : ":/icons/ic_cloud_done.svg"
-				}
-				text: PrefCloudStorage.cloud_auto_sync ? qsTr("Disable auto cloud sync") : qsTr("Enable auto cloud sync")
+					icon {
+						name: PrefCloudStorage.cloud_auto_sync ?  ":/icons/ic_cloud_done.svg" : ":/icons/ic_cloud_off.svg"
+					}
+					text: (PrefCloudStorage.cloud_auto_sync ? "\u2611 " : "\u2610 ") + qsTr("Auto cloud sync")
 					visible: Backend.cloud_verification_status !== Enums.CS_NOCLOUD
 					onTriggered: {
 						PrefCloudStorage.cloud_auto_sync = !PrefCloudStorage.cloud_auto_sync
-						manager.setGitLocalOnly(PrefCloudStorage.cloud_auto_sync)
+						manager.setGitLocalOnly(!PrefCloudStorage.cloud_auto_sync)
 						if (!PrefCloudStorage.cloud_auto_sync) {
 							showPassiveNotification(qsTr("Turning off automatic sync to cloud causes all data to only be \
 stored locally. This can be very useful in situations with limited or no network access. Please choose 'Manual sync with cloud' \
@@ -457,7 +473,16 @@ if you have network connectivity and want to sync your data to cloud storage."),
 					}
 					text: qsTr("Show user manual")
 					onTriggered: {
-						Qt.openUrlExternally("https://subsurface-divelog.org/documentation/subsurface-mobile-v3-user-manual/")
+						Qt.openUrlExternally("https://www.subsurface-divelog.org/subsurface-mobile-user-manual/")
+					}
+				}
+				Kirigami.Action {
+					icon {
+						name: ":/icons/recycle.svg"
+					}
+					text: qsTr("Contribute to Subsurface")
+					onTriggered: {
+						Qt.openUrlExternally("https://www.subsurface-divelog.org/contribute/")
 					}
 				}
 				Kirigami.Action {
@@ -781,6 +806,10 @@ if you have network connectivity and want to sync your data to cloud storage."),
 
 	Settings {
 		id: settingsWindow
+	}
+
+	DeleteAccount {
+		id: deleteAccount
 	}
 
 	CopySettings {

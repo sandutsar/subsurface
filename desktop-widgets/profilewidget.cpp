@@ -4,6 +4,7 @@
 #include "profile-widget/profilewidget2.h"
 #include "commands/command.h"
 #include "core/color.h"
+#include "core/selection.h"
 #include "core/settings/qPrefTechnicalDetails.h"
 #include "core/settings/qPrefPartialPressureGas.h"
 #include "core/subsurface-string.h"
@@ -51,14 +52,15 @@ void EmptyView::resizeEvent(QResizeEvent *)
 	update();
 }
 
-ProfileWidget::ProfileWidget() : originalDive(nullptr), placingCommand(false)
+ProfileWidget::ProfileWidget() : d(nullptr), dc(0), originalDive(nullptr), placingCommand(false)
 {
 	ui.setupUi(this);
 
 	// what is a sane order for those icons? we should have the ones the user is
 	// most likely to want towards the top so they are always visible
 	// and the ones that someone likely sets and then never touches again towards the bottom
-	toolbarActions = { ui.profCalcCeiling, ui.profCalcAllTissues, // start with various ceilings
+	toolbarActions = { ui.profInfobox, // show / hide the infobox
+			   ui.profCalcCeiling, ui.profCalcAllTissues, // various ceilings
 			   ui.profIncrement3m, ui.profDcCeiling,
 			   ui.profPhe, ui.profPn2, ui.profPO2, // partial pressure graphs
 			   ui.profRuler, ui.profScaled, // measuring and scaling
@@ -108,6 +110,7 @@ ProfileWidget::ProfileWidget() : originalDive(nullptr), placingCommand(false)
 	connect(ui.profTogglePicture,  &QAction::triggered, tec, &qPrefTechnicalDetails::set_show_pictures_in_profile);
 	connect(ui.profTankbar,        &QAction::triggered, tec, &qPrefTechnicalDetails::set_tankbar);
 	connect(ui.profTissues,        &QAction::triggered, tec, &qPrefTechnicalDetails::set_percentagegraph);
+	connect(ui.profInfobox,        &QAction::triggered, tec, &qPrefTechnicalDetails::set_infobox);
 
 	connect(ui.profTissues,        &QAction::triggered, this, &ProfileWidget::unsetProfHR);
 	connect(ui.profHR,             &QAction::triggered, this, &ProfileWidget::unsetProfTissues);
@@ -141,6 +144,7 @@ ProfileWidget::ProfileWidget() : originalDive(nullptr), placingCommand(false)
 	ui.profTankbar->setChecked(qPrefTechnicalDetails::tankbar());
 	ui.profTissues->setChecked(qPrefTechnicalDetails::percentagegraph());
 	ui.profScaled->setChecked(qPrefTechnicalDetails::zoomed_plot());
+	ui.profInfobox->setChecked(qPrefTechnicalDetails::infobox());
 }
 
 ProfileWidget::~ProfileWidget()
@@ -155,7 +159,6 @@ void ProfileWidget::setEnabledToolbar(bool enabled)
 
 void ProfileWidget::setDive(const struct dive *d)
 {
-	// If the user was currently editing a dive, exit edit mode.
 	stack->setCurrentIndex(1); // show profile
 
 	bool freeDiveMode = d->dc.divemode == FREEDIVE;
@@ -179,36 +182,75 @@ void ProfileWidget::setDive(const struct dive *d)
 	ui.profScaled->setDisabled(false); // measuring and scaling
 	ui.profTogglePicture->setDisabled(false);
 	ui.profHR->setDisabled(false);
+	ui.profInfobox->setDisabled(false);
 }
 
 void ProfileWidget::plotCurrentDive()
 {
+	plotDive(d, dc);
+}
+
+void ProfileWidget::plotDive(dive *dIn, int dcIn)
+{
+	d = dIn;
+
+	if (dcIn >= 0)
+		dc = dcIn;
+
+	// The following is valid because number_of_computers is always at least 1.
+	if (d)
+		dc = std::min(dc, (int)number_of_computers(current_dive) - 1);
+
 	// Exit edit mode if the dive changed
-	if (editedDive && (originalDive != current_dive || editedDc != dc_number))
+	if (editedDive && (originalDive != d || editedDc != dc))
 		exitEditMode();
 
 	// If this is a manually added dive and we are not in the planner
 	// or already editing the dive, switch to edit mode.
-	if (current_dive && !editedDive &&
+	if (d && !editedDive &&
 	    DivePlannerPointsModel::instance()->currentMode() == DivePlannerPointsModel::NOTHING) {
-		struct divecomputer *dc = get_dive_dc(current_dive, dc_number);
-		if (dc && same_string(dc->model, "manually added dive") && dc->samples)
+		struct divecomputer *comp = get_dive_dc(d, dc);
+		if (comp && is_manually_added_dc(comp) && comp->samples)
 			editDive();
 	}
 
-	setEnabledToolbar(current_dive != nullptr);
+	setEnabledToolbar(d != nullptr);
 	if (editedDive) {
-		setDive(originalDive);
 		view->plotDive(editedDive.get(), editedDc);
-	} else if (current_dive) {
-		setDive(current_dive);
-		view->setProfileState(current_dive, dc_number);
+		setDive(editedDive.get());
+	} else if (d) {
+		view->setProfileState(d, dc);
 		view->resetZoom(); // when switching dive, reset the zoomLevel
-		view->plotDive(current_dive, dc_number);
+		view->plotDive(d, dc);
+		setDive(d);
 	} else {
 		view->clear();
 		stack->setCurrentIndex(0);
 	}
+}
+
+void ProfileWidget::nextDC()
+{
+	rotateDC(1);
+}
+
+void ProfileWidget::prevDC()
+{
+	rotateDC(-1);
+}
+
+void ProfileWidget::rotateDC(int dir)
+{
+	if (!d)
+		return;
+	int numDC = number_of_computers(d);
+	int newDC = (dc + dir) % numDC;
+	if (newDC < 0)
+		newDC += numDC;
+	if (newDC == dc)
+		return;
+
+	plotDive(d, newDC);
 }
 
 void ProfileWidget::divesChanged(const QVector<dive *> &dives, DiveField field)
@@ -218,15 +260,15 @@ void ProfileWidget::divesChanged(const QVector<dive *> &dives, DiveField field)
 	// Also, if we are currently placing a command, don't do anything.
 	// Note that we cannot use Command::placingCommand(), because placing
 	// a depth or time change on the maintab requires an update.
-	if (!current_dive || !dives.contains(current_dive) || !(field.duration || field.depth) || placingCommand)
+	if (!d || !dives.contains(d) || !(field.duration || field.depth) || placingCommand)
 		return;
 
 	// If were editing the current dive and not currently
 	// placing command, we have to update the edited dive.
 	if (editedDive) {
-		copy_dive(current_dive, editedDive.get());
+		copy_dive(d, editedDive.get());
 		// TODO: Holy moly that function sends too many signals. Fix it!
-		DivePlannerPointsModel::instance()->loadFromDive(editedDive.get());
+		DivePlannerPointsModel::instance()->loadFromDive(editedDive.get(), editedDc);
 	}
 
 	plotCurrentDive();
@@ -235,8 +277,8 @@ void ProfileWidget::divesChanged(const QVector<dive *> &dives, DiveField field)
 void ProfileWidget::setPlanState(const struct dive *d, int dc)
 {
 	exitEditMode();
-	setDive(d);
 	view->setPlanState(d, dc);
+	setDive(d);
 }
 
 void ProfileWidget::unsetProfHR()
@@ -254,11 +296,11 @@ void ProfileWidget::unsetProfTissues()
 void ProfileWidget::editDive()
 {
 	editedDive.reset(alloc_dive());
-	editedDc = dc_number;
-	copy_dive(current_dive, editedDive.get()); // Work on a copy of the dive
-	originalDive = current_dive;
+	editedDc = dc;
+	copy_dive(d, editedDive.get()); // Work on a copy of the dive
+	originalDive = d;
 	DivePlannerPointsModel::instance()->setPlanMode(DivePlannerPointsModel::ADD);
-	DivePlannerPointsModel::instance()->loadFromDive(editedDive.get());
+	DivePlannerPointsModel::instance()->loadFromDive(editedDive.get(), editedDc);
 	view->setEditState(editedDive.get(), editedDc);
 }
 
@@ -267,7 +309,7 @@ void ProfileWidget::exitEditMode()
 	if (!editedDive)
 		return;
 	DivePlannerPointsModel::instance()->setPlanMode(DivePlannerPointsModel::NOTHING);
-	view->setProfileState(current_dive, dc_number); // switch back to original dive before erasing the copy.
+	view->setProfileState(d, dc); // switch back to original dive before erasing the copy.
 	editedDive.reset();
 	originalDive = nullptr;
 }
@@ -297,7 +339,7 @@ void ProfileWidget::stopAdded()
 		return;
 	calcDepth(*editedDive, editedDc);
 	Setter s(placingCommand, true);
-	Command::editProfile(editedDive.get(), Command::EditProfileType::ADD, 0);
+	Command::editProfile(editedDive.get(), editedDc, Command::EditProfileType::ADD, 0);
 }
 
 void ProfileWidget::stopRemoved(int count)
@@ -306,7 +348,7 @@ void ProfileWidget::stopRemoved(int count)
 		return;
 	calcDepth(*editedDive, editedDc);
 	Setter s(placingCommand, true);
-	Command::editProfile(editedDive.get(), Command::EditProfileType::REMOVE, count);
+	Command::editProfile(editedDive.get(), editedDc, Command::EditProfileType::REMOVE, count);
 }
 
 void ProfileWidget::stopMoved(int count)
@@ -315,5 +357,5 @@ void ProfileWidget::stopMoved(int count)
 		return;
 	calcDepth(*editedDive, editedDc);
 	Setter s(placingCommand, true);
-	Command::editProfile(editedDive.get(), Command::EditProfileType::MOVE, count);
+	Command::editProfile(editedDive.get(), editedDc, Command::EditProfileType::MOVE, count);
 }

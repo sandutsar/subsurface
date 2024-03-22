@@ -141,8 +141,10 @@ static const struct uuid_match serial_service_uuids[] = {
 	{ "6e400001-b5a3-f393-e0a9-e50e24dcca9e", "Nordic Semi UART" },
 	{ "98ae7120-e62e-11e3-badd-0002a5d5c51b", "Suunto (EON Steel/Core, G5)" },
 	{ "cb3c4555-d670-4670-bc20-b61dbc851e9a", "Pelagic (i770R, i200C, Pro Plus X, Geo 4.0)" },
-	{ "fdcdeaaa-295d-470e-bf15-04217b7aa0a0", "ScubaPro G2"},
-	{ "fe25c237-0ece-443c-b0aa-e02033e7029d", "Shearwater (Perdix/Teric/Peregrine)" },
+	{ "ca7b0001-f785-4c38-b599-c7c5fbadb034", "Pelagic (i330R, DSX)" },
+	{ "fdcdeaaa-295d-470e-bf15-04217b7aa0a0", "ScubaPro (G2, G3)"},
+	{ "fe25c237-0ece-443c-b0aa-e02033e7029d", "Shearwater (Perdix/Teric/Peregrine/Tern)" },
+	{ "0000fcef-0000-1000-8000-00805f9b34fb", "Divesoft" },
 	{ NULL, }
 };
 
@@ -673,6 +675,12 @@ dc_status_t qt_ble_open(void **io, dc_context_t *, const char *devaddr, device_d
 
 			ble->preferredService()->writeDescriptor(d, QByteArray::fromHex("0100"));
 			WAITFOR(ble->descriptorWritten(), 1000);
+			if (!ble->descriptorWritten()) {
+				qDebug() << "Bluetooth: Failed to enable notifications for characteristic" << c.uuid();
+				report_error("Bluetooth: Failed to enable notifications.");
+				delete ble;
+				return DC_STATUS_TIMEOUT;
+			}
 			break;
 		}
 	}

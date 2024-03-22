@@ -21,6 +21,7 @@
 #include "core/selection.h"
 #include "core/trip.h"
 
+#include <array> // for std::array
 #include <cmath>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -35,6 +36,7 @@ static const double selectionLassoWidth = 2.0;		// Border between title and char
 
 StatsView::StatsView(QQuickItem *parent) : QQuickItem(parent),
 	backgroundDirty(true),
+	currentTheme(&getStatsTheme(false)),
 	highlightedSeries(nullptr),
 	xAxis(nullptr),
 	yAxis(nullptr),
@@ -53,9 +55,6 @@ StatsView::StatsView(QQuickItem *parent) : QQuickItem(parent),
 
 	setAcceptHoverEvents(true);
 	setAcceptedMouseButtons(Qt::LeftButton);
-
-	QFont font;
-	titleFont = QFont(font.family(), font.pointSize(), QFont::Light);	// Make configurable
 }
 
 StatsView::StatsView() : StatsView(nullptr)
@@ -99,7 +98,7 @@ void StatsView::mousePressEvent(QMouseEvent *event)
 		if (selectionRect)
 			deleteChartItem(selectionRect); // Ooops. Already a selection in place.
 		dragStartMouse = pos;
-		selectionRect = createChartItem<ChartRectLineItem>(ChartZValue::Selection, selectionLassoColor, selectionLassoWidth);
+		selectionRect = createChartItem<ChartRectLineItem>(ChartZValue::Selection, currentTheme->selectionLassoColor, selectionLassoWidth);
 		selectionModifier = modifier;
 		oldSelection = modifier.ctrl ? getDiveSelection() : std::vector<dive *>();
 		grabMouse();
@@ -143,7 +142,7 @@ RootNode::RootNode(StatsView &view) : view(view)
 	// also be done on the widget level, but would have to be done
 	// separately for desktop and mobile, so do it here.
 	backgroundNode.reset(view.w()->createRectangleNode());
-	backgroundNode->setColor(backgroundColor);
+	backgroundNode->setColor(view.getCurrentTheme().backgroundColor);
 	appendChildNode(backgroundNode.get());
 
 	for (auto &zNode: zNodes) {
@@ -184,7 +183,7 @@ QSGNode *StatsView::updatePaintNode(QSGNode *oldNode, QQuickItem::UpdatePaintNod
 	}
 
 	for (ChartItem *item = dirtyItems.first; item; item = item->next) {
-		item->render();
+		item->render(*currentTheme);
 		item->dirty = false;
 	}
 	dirtyItems.splice(cleanItems);
@@ -297,6 +296,17 @@ void StatsView::ChartItemList::splice(ChartItemList &l2)
 QQuickWindow *StatsView::w() const
 {
 	return window();
+}
+
+void StatsView::setTheme(bool dark)
+{
+	currentTheme = &getStatsTheme(dark);
+	rootNode->backgroundNode->setColor(currentTheme->backgroundColor);
+}
+
+const StatsTheme &StatsView::getCurrentTheme() const
+{
+	return *currentTheme;
 }
 
 QSizeF StatsView::size() const
@@ -458,8 +468,8 @@ void StatsView::setTitle(const QString &s)
 		// Ooops. Currently we do not support setting the title twice.
 		return;
 	}
-	title = createChartItem<ChartTextItem>(ChartZValue::Legend, titleFont, s);
-	title->setColor(darkLabelColor);
+	title = createChartItem<ChartTextItem>(ChartZValue::Legend, currentTheme->titleFont, s);
+	title->setColor(currentTheme->darkLabelColor);
 }
 
 void StatsView::updateTitlePos()
@@ -700,7 +710,7 @@ static std::vector<QString> makePercentageLabels(int count, int total, bool isHo
 	if (isHorizontal)
 		return { QString("%1 (%2)").arg(countString, percentageString) };
 	else
-		return { countString, percentageString };
+		return { std::move(countString), std::move(percentageString) };
 }
 
 // From a list of dive bins, make (dives, label) pairs, where the label
@@ -882,7 +892,7 @@ void StatsView::plotValueChart(const std::vector<dive *> &dives,
 		if (res.isValid()) {
 			double height = res.get(valueAxisOperation);
 			QString value = QString("%L1").arg(height, 0, 'f', decimals);
-			std::vector<QString> label = std::vector<QString> { value };
+			std::vector<QString> label = std::vector<QString> { std::move(value) };
 			items.push_back({ pos - 0.5, pos + 0.5, height, label,
 					  categoryBinner->formatWithUnit(*bin), res });
 		}
@@ -1070,7 +1080,7 @@ HistogramAxis *StatsView::createHistogramAxis(const QString &name, const StatsBi
 		QString label = binner.formatLowerBound(*bin);
 		double lowerBound = binner.lowerBoundToFloat(*bin);
 		bool prefer = binner.preferBin(*bin);
-		labels.push_back({ label, lowerBound, prefer });
+		labels.push_back({ std::move(label), lowerBound, prefer });
 	}
 
 	const StatsBin &lastBin = *bins.back().bin;
@@ -1119,7 +1129,7 @@ void StatsView::plotHistogramCountChart(const std::vector<dive *> &dives,
 		double upperBound = categoryBinner->upperBoundToFloat(*bin);
 		std::vector<QString> label = makePercentageLabels((int)dives.size(), total, isHorizontal);
 
-		items.push_back({ lowerBound, upperBound, std::move(dives), label,
+		items.push_back({ lowerBound, upperBound, std::move(dives), std::move(label),
 				  categoryBinner->formatWithUnit(*bin), total });
 	}
 
@@ -1128,10 +1138,10 @@ void StatsView::plotHistogramCountChart(const std::vector<dive *> &dives,
 	if (categoryVariable->type() == StatsVariable::Type::Numeric) {
 		double mean = categoryVariable->mean(dives);
 		if (!std::isnan(mean))
-			meanMarker = createChartItem<HistogramMarker>(mean, isHorizontal, meanMarkerColor, xAxis, yAxis);
+			meanMarker = createChartItem<HistogramMarker>(mean, isHorizontal, currentTheme->meanMarkerColor, xAxis, yAxis);
 		double median = categoryVariable->quartiles(dives).q2;
 		if (!std::isnan(median))
-			medianMarker = createChartItem<HistogramMarker>(median, isHorizontal, medianMarkerColor, xAxis, yAxis);
+			medianMarker = createChartItem<HistogramMarker>(median, isHorizontal, currentTheme->medianMarkerColor, xAxis, yAxis);
 	}
 }
 

@@ -96,6 +96,7 @@ struct preferences {
 	dive_computer_prefs_t dive_computer2;
 	dive_computer_prefs_t dive_computer3;
 	dive_computer_prefs_t dive_computer4;
+	bool sync_dc_time;
 
 	// ********** Display *************
 	bool        display_invalid_dives;
@@ -103,10 +104,12 @@ struct preferences {
 	double      font_size;
 	double      mobile_scale;
 	bool        show_developer;
+	bool        three_m_based_grid;
+	bool        map_short_names;
 
 	// ********** Equipment tab *******
 	const char *default_cylinder;
-	bool        display_unused_tanks;
+	bool        include_unused_tanks;
 	bool        display_default_tank_infos;
 
 	// ********** General **********
@@ -201,6 +204,7 @@ struct preferences {
 	bool                        tankbar;
 	int                         vpmb_conservatism;
 	bool                        zoomed_plot;
+	bool                        infobox;
 
 	// ********** Units **********
 	bool                    coordinates_traditional;
@@ -223,7 +227,6 @@ extern void subsurface_OS_pref_setup();
 extern void copy_prefs(struct preferences *src, struct preferences *dest);
 
 extern void set_informational_units(const char *units);
-extern void set_git_prefs(const char *prefs);
 
 #ifdef __cplusplus
 }

@@ -1,13 +1,13 @@
 Source: subsurface
 Section: utils
 Priority: optional
-Maintainer: Dirk Hohndel <dirk@hohndel.org>
+Maintainer: Subsurface CI Bot <dirk@subsurface-divelog.org>
 Build-Depends: asciidoc,
                debhelper (>= 9),
-               libgconf2-dev,
                libtool,
                libxml2-dev,
                libxslt-dev,
+               libgit2-dev,
                libsoup2.4-dev,
                pkg-config,
                txt2html,
@@ -31,7 +31,6 @@ Build-Depends: asciidoc,
                libqt5webkit5-dev,
                qtscript5-dev,
                qttools5-dev,
-               qt5-default,
                qtlocation5-dev,
                qtpositioning5-dev,
                qml-module-qtpositioning,

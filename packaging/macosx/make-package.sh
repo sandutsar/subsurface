@@ -7,18 +7,18 @@
 # find the directory above the sources - typically ~/src
 DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && cd ../../.. && pwd )
 
-# install location of yourway-create-dmg
-# by default we assume it's next to subsurface in ~/src/yoursway-create-dmg
-DMGCREATE=${DIR}/yoursway-create-dmg/create-dmg
+DMGCREATE=create-dmg
 
 # same git version magic as in the Makefile
 # for the naming of volume and dmg we want the 3 digits of the full version number
-VERSION=$(cd ${DIR}/subsurface; ./scripts/get-version linux)
+VERSION=$(cd ${DIR}/subsurface; ./scripts/get-version)
 
 # first build and install Subsurface and then clean up the staging area
 # make sure we didn't lose the minimum OS version
 rm -rf ./Subsurface.app
-if [ -d /Developer/SDKs ] ; then
+if [ -d /Library/Developer/CommandLineTools/SDKs ] ; then
+	SDKROOT=/Library/Developer/CommandLineTools/SDKs
+elif [ -d /Developer/SDKs ] ; then
 	SDKROOT=/Developer/SDKs
 elif [ -d /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs ] ; then
 	SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs
@@ -27,11 +27,18 @@ else
 	echo "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs)"
 	exit 1;
 fi
-BASESDK=$(ls $SDKROOT | grep "MacOSX10\.1.\.sdk" | head -1 | sed -e "s/MacOSX//;s/\.sdk//")
+BASESDK=$(ls $SDKROOT | grep "MacOSX1.*\.sdk" | head -1 | sed -e "s/MacOSX//;s/\.sdk//")
 OLDER_MAC_CMAKE="-DCMAKE_OSX_DEPLOYMENT_TARGET=${BASESDK} -DCMAKE_OSX_SYSROOT=${SDKROOT}/MacOSX${BASESDK}.sdk/"
 export PKG_CONFIG_PATH=${DIR}/install-root/lib/pkgconfig:$PKG_CONFIG_PATH
-cmake $OLDER_MAC_CMAKE .
-LIBRARY_PATH=${DIR}/install-root/lib make -j8
+
+cmake $OLDER_MAC_CMAKE \
+	-DLIBGIT2_FROM_PKGCONFIG=ON \
+	-DLIBGIT2_DYNAMIC=ON \
+	-DFTDISUPPORT=ON \
+	-DMAKE_TESTS=Off \
+	.
+
+LIBRARY_PATH=${DIR}/install-root/lib make -j
 LIBRARY_PATH=${DIR}/install-root/lib make install
 
 # now adjust a few references that macdeployqt appears to miss
@@ -56,7 +63,8 @@ done
 
 # ensure libpng and libjpeg inside the bundle are referenced in QtWebKit libraries
 QTWEBKIT=Subsurface.app/Contents/Frameworks/QtWebKit.framework/QtWebKit
-for i in libjpeg.8.dylib libpng16.16.dylib; do
+if [ -f $QTWEBKIT ] ; then
+    for i in libjpeg.8.dylib libpng16.16.dylib; do
 	OLD=$(otool -L ${QTWEBKIT} | grep $i | cut -d\  -f1 | tr -d "\t")
         if [[ ! -z ${OLD} ]] ; then
                 # copy the library into the bundle and make sure its id and the reference to it are correct
@@ -67,7 +75,8 @@ for i in libjpeg.8.dylib libpng16.16.dylib; do
                 install_name_tool -change ${OLD} @executable_path/../Frameworks/${SONAME} ${QTWEBKIT}
                 install_name_tool -id @executable_path/../Frameworks/${SONAME} Subsurface.app/Contents/Frameworks/${SONAME}
         fi
-done
+    done
+fi
 
 # next, copy libssh2.1
 # cp ${DIR}/install-root/lib/libssh2.1.dylib Subsurface.app/Contents/Frameworks
@@ -80,6 +89,10 @@ done
 
 if [ "$1" = "-nodmg" ] ; then
 	exit 0
+elif [ "$1" = "-sign" ] ; then
+	SIGN=1
+else
+	SIGN=0
 fi
 
 # copy things into staging so we can create a nice DMG
@@ -87,7 +100,9 @@ rm -rf ./staging
 mkdir ./staging
 cp -a ./Subsurface.app ./staging
 
-sh ${DIR}/subsurface/packaging/macosx/sign
+if [ "$SIGN" = "1" ] ; then
+	sh ${DIR}/subsurface/packaging/macosx/sign
+fi
 
 if [ -f ./Subsurface-$VERSION.dmg ]; then
 	rm ./Subsurface-$VERSION.dmg.bak
